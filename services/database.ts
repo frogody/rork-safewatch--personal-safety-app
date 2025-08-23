@@ -170,23 +170,44 @@ export class DatabaseService {
   // Real-time subscriptions via Supabase
   private static alertsChannel: ReturnType<typeof supabase.channel> | null = null;
   private static responsesChannel: ReturnType<typeof supabase.channel> | null = null;
+  private static alertSubscribers: Array<(alert: DatabaseAlert) => void> = [];
+  private static responseSubscribers: Array<(response: DatabaseAlertResponse) => void> = [];
+
+  private static ensureAlertChannel() {
+    if (this.alertsChannel) return;
+    this.alertsChannel = supabase.channel('alerts-changes');
+    this.alertsChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, (payload) => {
+        const newRecord = payload.new as DatabaseAlert;
+        if (!newRecord) return;
+        this.alertSubscribers.forEach((cb) => {
+          try { cb(newRecord); } catch (e) { console.error(e); }
+        });
+      })
+      .subscribe();
+  }
+
+  private static ensureResponseChannel() {
+    if (this.responsesChannel) return;
+    this.responsesChannel = supabase.channel('alert-responses-changes');
+    this.responsesChannel
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'alert_responses' }, (payload) => {
+        const newRecord = payload.new as DatabaseAlertResponse;
+        if (!newRecord) return;
+        this.responseSubscribers.forEach((cb) => {
+          try { cb(newRecord); } catch (e) { console.error(e); }
+        });
+      })
+      .subscribe();
+  }
 
   static subscribeToAlerts(callback: (alert: DatabaseAlert) => void): () => void {
-    if (!this.alertsChannel) {
-      this.alertsChannel = supabase.channel('alerts-changes');
-      this.alertsChannel
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, (payload) => {
-          const newRecord = payload.new as DatabaseAlert;
-          if (newRecord) {
-            callback(newRecord);
-          }
-        })
-        .subscribe();
-    }
-
-    // Return unsubscribe that unsubscribes the channel if no other listeners are required
+    this.alertSubscribers.push(callback);
+    this.ensureAlertChannel();
     return () => {
-      if (this.alertsChannel) {
+      const idx = this.alertSubscribers.indexOf(callback);
+      if (idx >= 0) this.alertSubscribers.splice(idx, 1);
+      if (this.alertSubscribers.length === 0 && this.alertsChannel) {
         supabase.removeChannel(this.alertsChannel);
         this.alertsChannel = null;
       }
@@ -194,20 +215,12 @@ export class DatabaseService {
   }
 
   static subscribeToAlertResponses(callback: (response: DatabaseAlertResponse) => void): () => void {
-    if (!this.responsesChannel) {
-      this.responsesChannel = supabase.channel('alert-responses-changes');
-      this.responsesChannel
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'alert_responses' }, (payload) => {
-          const newRecord = payload.new as DatabaseAlertResponse;
-          if (newRecord) {
-            callback(newRecord);
-          }
-        })
-        .subscribe();
-    }
-
+    this.responseSubscribers.push(callback);
+    this.ensureResponseChannel();
     return () => {
-      if (this.responsesChannel) {
+      const idx = this.responseSubscribers.indexOf(callback);
+      if (idx >= 0) this.responseSubscribers.splice(idx, 1);
+      if (this.responseSubscribers.length === 0 && this.responsesChannel) {
         supabase.removeChannel(this.responsesChannel);
         this.responsesChannel = null;
       }

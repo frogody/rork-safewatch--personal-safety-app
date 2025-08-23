@@ -121,7 +121,13 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const signUp = useCallback(async (email: string, password: string, name: string, userType: 'safety-seeker' | 'responder') => {
     try {
-      const { data, error } = await supabase.auth.signUp({ email, password });
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name, user_type: userType },
+        }
+      });
       if (error) return { success: false, error: error.message };
       const authUser = data.user;
       if (!authUser) return { success: false, error: 'No user returned from sign up' };
@@ -137,7 +143,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
         profileComplete: false,
       };
 
-      await DatabaseService.createUser(appUserToDbUser(profile));
+      // Profile is auto-created via DB trigger; update details if needed
 
       await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(profile));
       setAuthState(prev => ({ ...prev, user: profile, isAuthenticated: true }));
