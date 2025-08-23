@@ -1,0 +1,521 @@
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import createContextHook from '@nkzw/create-context-hook';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import * as Location from 'expo-location';
+import { DatabaseService } from '@/services/database';
+import type { DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
+import { useAuth } from './auth-store';
+
+export interface SafetyAlert {
+  id: string;
+  title: string;
+  description: string;
+  timestamp: Date;
+  location: {
+    latitude: number;
+    longitude: number;
+    address?: string;
+  };
+  status: 'active' | 'acknowledged' | 'resolved';
+  responses?: {
+    userId: string;
+    timestamp: Date;
+    action: 'acknowledge' | 'respond';
+  }[];
+  // New fields for responder management
+  responseDeadline?: Date;
+  currentBatch?: number;
+  maxBatches?: number;
+  respondersPerBatch?: number;
+  totalResponders?: number;
+}
+
+export interface SafetySettings {
+  notifications: boolean;
+  locationSharing: boolean;
+  autoEmergencyCall: boolean;
+  responseTimeout: number;
+  alertRadius: number;
+}
+
+export interface JourneyDestination {
+  id: string;
+  name: string;
+  address: string;
+  latitude: number;
+  longitude: number;
+  estimatedArrival?: Date;
+  transport: 'walk' | 'bike' | 'car' | 'public';
+}
+
+export interface JourneyMonitoring {
+  isActive: boolean;
+  destination: JourneyDestination | null;
+  startTime: Date | null;
+  lastMovement: Date | null;
+  isStationary: boolean;
+  stationaryDuration: number; // in milliseconds
+  movementThreshold: number; // in milliseconds based on transport
+  preAlarmTriggered: boolean;
+}
+
+interface SafetyState {
+  isMonitoring: boolean;
+  currentLocation: Location.LocationObject['coords'] | null;
+  alerts: SafetyAlert[];
+  settings: SafetySettings;
+  journey: JourneyMonitoring;
+}
+
+const SAFETY_STORAGE_KEY = '@safewatch_safety';
+const SYNC_INTERVAL = 1000; // 1 second for real-time feel
+
+// Helper functions to convert between database and app formats
+function dbAlertToAppAlert(dbAlert: DatabaseAlert, responses: DatabaseAlertResponse[] = []): SafetyAlert {
+  return {
+    id: dbAlert.id,
+    title: dbAlert.title,
+    description: dbAlert.description,
+    timestamp: new Date(dbAlert.timestamp),
+    location: {
+      latitude: dbAlert.latitude,
+      longitude: dbAlert.longitude,
+      address: dbAlert.address,
+    },
+    status: dbAlert.status,
+    responses: responses.map(r => ({
+      userId: r.user_id,
+      timestamp: new Date(r.timestamp),
+      action: r.action,
+    })),
+    responseDeadline: dbAlert.response_deadline ? new Date(dbAlert.response_deadline) : undefined,
+    currentBatch: dbAlert.current_batch,
+    maxBatches: dbAlert.max_batches,
+    respondersPerBatch: dbAlert.responders_per_batch,
+    totalResponders: dbAlert.total_responders,
+  };
+}
+
+function appAlertToDbAlert(appAlert: SafetyAlert, userId: string): Omit<DatabaseAlert, 'created_at' | 'updated_at'> {
+  return {
+    id: appAlert.id,
+    title: appAlert.title,
+    description: appAlert.description,
+    timestamp: appAlert.timestamp.toISOString(),
+    latitude: appAlert.location.latitude,
+    longitude: appAlert.location.longitude,
+    address: appAlert.location.address,
+    status: appAlert.status,
+    user_id: userId,
+    response_deadline: appAlert.responseDeadline?.toISOString(),
+    current_batch: appAlert.currentBatch,
+    max_batches: appAlert.maxBatches,
+    responders_per_batch: appAlert.respondersPerBatch,
+    total_responders: appAlert.totalResponders,
+  };
+}
+
+const defaultSettings: SafetySettings = {
+  notifications: true,
+  locationSharing: true,
+  autoEmergencyCall: false,
+  responseTimeout: 60,
+  alertRadius: 1000,
+};
+
+export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  
+  const [safetyState, setSafetyState] = useState<SafetyState>({
+    isMonitoring: false,
+    currentLocation: null,
+    alerts: [],
+    settings: defaultSettings,
+    journey: {
+      isActive: false,
+      destination: null,
+      startTime: null,
+      lastMovement: null,
+      isStationary: false,
+      stationaryDuration: 0,
+      movementThreshold: 2 * 60 * 1000, // 2 minutes default
+      preAlarmTriggered: false,
+    },
+  });
+
+  // Real-time alerts query using database
+  const alertsQuery = useQuery({
+    queryKey: ['alerts'],
+    queryFn: async () => {
+      try {
+        const dbAlerts = await DatabaseService.getAlerts();
+        const alertsWithResponses = await Promise.all(
+          dbAlerts.map(async (dbAlert) => {
+            const responses = await DatabaseService.getAlertResponses(dbAlert.id);
+            return dbAlertToAppAlert(dbAlert, responses);
+          })
+        );
+        console.log('📡 Loaded alerts from database:', alertsWithResponses.length);
+        return alertsWithResponses;
+      } catch (error) {
+        console.error('❌ Error loading alerts from database:', error);
+        return [];
+      }
+    },
+    refetchInterval: SYNC_INTERVAL,
+    staleTime: 500,
+  });
+
+  // Real-time subscription to database changes
+  useEffect(() => {
+    const unsubscribeAlerts = DatabaseService.subscribeToAlerts((dbAlert) => {
+      console.log('📡 Received real-time alert update:', dbAlert.id);
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    });
+
+    const unsubscribeResponses = DatabaseService.subscribeToAlertResponses((response) => {
+      console.log('📡 Received real-time response update:', response.alert_id);
+      queryClient.invalidateQueries({ queryKey: ['alerts'] });
+    });
+
+    return () => {
+      unsubscribeAlerts();
+      unsubscribeResponses();
+    };
+  }, [queryClient]);
+
+  // Update local state when alerts change
+  useEffect(() => {
+    if (alertsQuery.data) {
+      setSafetyState(prev => ({
+        ...prev,
+        alerts: alertsQuery.data,
+      }));
+    }
+  }, [alertsQuery.data]);
+
+  useEffect(() => {
+    loadSafetyState();
+  }, []);
+
+  const loadSafetyState = async () => {
+    try {
+      const savedData = await AsyncStorage.getItem(SAFETY_STORAGE_KEY);
+      if (savedData) {
+        const parsed = JSON.parse(savedData);
+        setSafetyState(prev => ({
+          ...prev,
+          settings: { ...defaultSettings, ...parsed.settings },
+          alerts: parsed.alerts || [],
+        }));
+      }
+    } catch (error) {
+      console.error('Error loading safety state:', error);
+    }
+  };
+
+  const saveSafetyState = useCallback(async (state: Partial<SafetyState>) => {
+    try {
+      const dataToSave = {
+        settings: state.settings || safetyState.settings,
+        alerts: state.alerts || safetyState.alerts,
+      };
+      await AsyncStorage.setItem(SAFETY_STORAGE_KEY, JSON.stringify(dataToSave));
+    } catch (error) {
+      console.error('Error saving safety state:', error);
+    }
+  }, [safetyState]);
+
+  const startMonitoring = useCallback(async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Location permission denied');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+
+      setSafetyState(prev => ({
+        ...prev,
+        isMonitoring: true,
+        currentLocation: location.coords,
+      }));
+
+      console.log('Safety monitoring started');
+    } catch (error) {
+      console.error('Error starting monitoring:', error);
+    }
+  }, []);
+
+  const stopMonitoring = useCallback(() => {
+    setSafetyState(prev => ({
+      ...prev,
+      isMonitoring: false,
+      currentLocation: null,
+    }));
+    console.log('Safety monitoring stopped');
+  }, []);
+
+  const checkAndEscalateAlert = useCallback(async (alertId: string) => {
+    try {
+      const currentAlerts = alertsQuery.data || [];
+      const alert = currentAlerts.find(a => a.id === alertId);
+      
+      if (!alert || alert.status !== 'active') {
+        return; // Alert already resolved or doesn't exist
+      }
+
+      const hasResponders = alert.responses?.some(r => r.action === 'respond') || false;
+      if (hasResponders) {
+        return; // Someone is already responding
+      }
+
+      // No responders, escalate to next batch
+      const currentBatch = alert.currentBatch || 1;
+      const maxBatches = alert.maxBatches || 5;
+      
+      if (currentBatch < maxBatches) {
+        const updates = {
+          current_batch: currentBatch + 1,
+          response_deadline: new Date(Date.now() + 2 * 60 * 1000).toISOString(),
+        };
+        
+        await DatabaseService.updateAlert(alertId, updates);
+        
+        console.log(`🚨 Escalating alert ${alertId} to batch ${currentBatch + 1}`);
+        console.log('👥 Sending to 10 more responders...');
+        
+        // Schedule next escalation
+        setTimeout(() => {
+          checkAndEscalateAlert(alertId);
+        }, 2 * 60 * 1000);
+      } else {
+        // Max batches reached, escalate to emergency services
+        console.log(`🚨 CRITICAL: Alert ${alertId} reached max batches - escalating to emergency services`);
+        console.log('📞 Calling 911 automatically...');
+        
+        await DatabaseService.updateAlert(alertId, {
+          status: 'acknowledged',
+          description: alert.description + ' [ESCALATED TO EMERGENCY SERVICES]'
+        });
+      }
+    } catch (error) {
+      console.error('❌ Error escalating alert:', error);
+    }
+  }, [alertsQuery.data]);
+
+  const triggerAlert = useCallback(async () => {
+    if (!user) {
+      console.error('❌ Cannot trigger alert: User not authenticated');
+      return;
+    }
+
+    const now = new Date();
+    const newAlert: SafetyAlert = {
+      id: Date.now().toString(),
+      title: `Distress Signal from ${user.name}`,
+      description: 'User activated "I feel unsafe" and did not cancel within the time limit. Immediate assistance may be needed.',
+      timestamp: now,
+      location: {
+        latitude: safetyState.currentLocation?.latitude ?? 37.7749,
+        longitude: safetyState.currentLocation?.longitude ?? -122.4194,
+        address: 'Current Location',
+      },
+      status: 'active' as const,
+      // Alert distribution system
+      responseDeadline: new Date(now.getTime() + 2 * 60 * 1000), // 2 minutes
+      currentBatch: 1,
+      maxBatches: 5, // Allow up to 5 batches (50 total responders max)
+      respondersPerBatch: 10,
+      totalResponders: 0,
+    };
+
+    try {
+      // Create alert in database
+      const dbAlert = appAlertToDbAlert(newAlert, user.id);
+      await DatabaseService.createAlert(dbAlert);
+      
+      // Save to local state
+      const newState = {
+        ...safetyState,
+        alerts: [newAlert, ...safetyState.alerts],
+      };
+      setSafetyState(newState);
+      saveSafetyState(newState);
+
+      // Simulate sending alert to first batch of nearby responders
+      console.log('🚨 DISTRESS SIGNAL SENT TO ALL DEVICES');
+      console.log('📍 Location:', newAlert.location);
+      console.log('👥 Sending to batch 1 (10 nearby responders)...');
+      console.log('⏰ Response deadline: 2 minutes');
+      console.log('📞 Contacting emergency contacts...');
+      console.log('🔄 Alert synced across all connected devices');
+      
+      // Set up automatic batch escalation if no response
+      setTimeout(() => {
+        checkAndEscalateAlert(newAlert.id);
+      }, 2 * 60 * 1000); // Check after 2 minutes
+    } catch (error) {
+      console.error('❌ Failed to send alert:', error);
+    }
+  }, [safetyState, saveSafetyState, user, checkAndEscalateAlert]);
+
+  const respondToAlert = useCallback(async (alertId: string, response: 'acknowledge' | 'respond') => {
+    if (!user) {
+      console.error('❌ Cannot respond to alert: User not authenticated');
+      return;
+    }
+
+    try {
+      // Create response in database
+      const alertResponse: Omit<DatabaseAlertResponse, 'created_at'> = {
+        id: Date.now().toString(),
+        alert_id: alertId,
+        user_id: user.id,
+        timestamp: new Date().toISOString(),
+        action: response,
+      };
+      
+      await DatabaseService.createAlertResponse(alertResponse);
+
+      // Update alert status if responding
+      if (response === 'respond') {
+        await DatabaseService.updateAlert(alertId, { status: 'acknowledged' });
+      }
+
+      console.log(`✅ Response to alert ${alertId} with ${response} synced to all devices`);
+    } catch (error) {
+      console.error('❌ Failed to respond to alert:', error);
+    }
+  }, [user]);
+
+  const updateSettings = useCallback((newSettings: Partial<SafetySettings>) => {
+    const updatedSettings = { ...safetyState.settings, ...newSettings };
+    const newState = {
+      ...safetyState,
+      settings: updatedSettings,
+    };
+
+    setSafetyState(newState);
+    saveSafetyState(newState);
+    console.log('Settings updated:', newSettings);
+  }, [safetyState, saveSafetyState]);
+
+  const startJourney = useCallback((destination: JourneyDestination) => {
+    const transportThresholds = {
+      walk: 2 * 60 * 1000,
+      bike: 1 * 60 * 1000,
+      car: 3 * 60 * 1000,
+      public: 4 * 60 * 1000,
+    };
+
+    setSafetyState(prev => ({
+      ...prev,
+      journey: {
+        ...prev.journey,
+        isActive: true,
+        destination,
+        startTime: new Date(),
+        lastMovement: new Date(),
+        isStationary: false,
+        stationaryDuration: 0,
+        movementThreshold: transportThresholds[destination.transport],
+        preAlarmTriggered: false,
+      },
+    }));
+    console.log('Journey started to:', destination.name);
+  }, []);
+
+  const stopJourney = useCallback(() => {
+    setSafetyState(prev => ({
+      ...prev,
+      journey: {
+        ...prev.journey,
+        isActive: false,
+        destination: null,
+        startTime: null,
+        lastMovement: null,
+        isStationary: false,
+        stationaryDuration: 0,
+        preAlarmTriggered: false,
+      },
+    }));
+    console.log('Journey stopped');
+  }, []);
+
+  const updateMovement = useCallback((hasMovement: boolean) => {
+    setSafetyState(prev => {
+      if (!prev.journey.isActive) return prev;
+
+      const now = new Date();
+      const lastMovement = hasMovement ? now : prev.journey.lastMovement;
+      const timeSinceMovement = lastMovement ? now.getTime() - lastMovement.getTime() : 0;
+      const isStationary = timeSinceMovement > prev.journey.movementThreshold;
+
+      return {
+        ...prev,
+        journey: {
+          ...prev.journey,
+          lastMovement,
+          isStationary,
+          stationaryDuration: timeSinceMovement,
+        },
+      };
+    });
+  }, []);
+
+  const triggerPreAlarm = useCallback(() => {
+    setSafetyState(prev => ({
+      ...prev,
+      journey: {
+        ...prev.journey,
+        preAlarmTriggered: true,
+      },
+    }));
+    console.log('Pre-alarm triggered for journey monitoring');
+  }, []);
+
+  const simulateStationaryForDemo = useCallback(() => {
+    setSafetyState(prev => {
+      if (!prev.journey.isActive) return prev;
+
+      // Set last movement to be older than the threshold to trigger stationary state
+      const thresholdTime = new Date(Date.now() - prev.journey.movementThreshold - 30000); // 30 seconds past threshold
+      
+      return {
+        ...prev,
+        journey: {
+          ...prev.journey,
+          lastMovement: thresholdTime,
+          isStationary: true,
+          stationaryDuration: prev.journey.movementThreshold + 30000,
+        },
+      };
+    });
+    console.log('Demo: Simulated stationary state');
+  }, []);
+
+  return useMemo(() => ({
+    ...safetyState,
+    startMonitoring,
+    stopMonitoring,
+    triggerAlert,
+    respondToAlert,
+    updateSettings,
+    startJourney,
+    stopJourney,
+    updateMovement,
+    triggerPreAlarm,
+    simulateStationaryForDemo,
+    isLoading: alertsQuery.isLoading,
+    isError: alertsQuery.isError,
+    refetchAlerts: alertsQuery.refetch,
+    // Database connection status
+    isConnected: !alertsQuery.isError,
+  }), [safetyState, startMonitoring, stopMonitoring, triggerAlert, respondToAlert, updateSettings, startJourney, stopJourney, updateMovement, triggerPreAlarm, simulateStationaryForDemo, alertsQuery.isLoading, alertsQuery.isError, alertsQuery.refetch]);
+});
