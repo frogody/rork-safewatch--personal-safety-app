@@ -315,40 +315,51 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       return;
     }
 
-    const now = new Date();
-    const newAlert: SafetyAlert = {
-      id: Date.now().toString(),
-      title: `Distress Signal from ${user.name}`,
-      description: 'User activated "I feel unsafe" and did not cancel within the time limit. Immediate assistance may be needed.',
-      timestamp: now,
-      location: {
-        latitude: safetyState.currentLocation?.latitude ?? 37.7749,
-        longitude: safetyState.currentLocation?.longitude ?? -122.4194,
-        address: 'Current Location',
-      },
-      status: 'active' as const,
-      // Alert distribution system
-      responseDeadline: new Date(now.getTime() + 2 * 60 * 1000), // 2 minutes
-      currentBatch: 1,
-      maxBatches: 5, // Allow up to 5 batches (50 total responders max)
-      respondersPerBatch: 10,
-      totalResponders: 0,
-    };
-
     try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.error('❌ Cannot trigger alert: Location permission denied');
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+
+      const coords = location.coords;
+      const now = new Date();
+      const newAlert: SafetyAlert = {
+        id: Date.now().toString(),
+        title: `Distress Signal from ${user.name}`,
+        description: 'User activated "I feel unsafe" and did not cancel within the time limit. Immediate assistance may be needed.',
+        timestamp: now,
+        location: {
+          latitude: coords.latitude,
+          longitude: coords.longitude,
+          address: 'Current Location',
+        },
+        status: 'active' as const,
+        // Alert distribution system
+        responseDeadline: new Date(now.getTime() + 2 * 60 * 1000), // 2 minutes
+        currentBatch: 1,
+        maxBatches: 5,
+        respondersPerBatch: 10,
+        totalResponders: 0,
+      };
+
       // Create alert in database
       const dbAlert = appAlertToDbAlert(newAlert, user.id);
       await DatabaseService.createAlert(dbAlert);
       
-      // Save to local state
+      // Save to local state and update current location
       const newState = {
         ...safetyState,
+        currentLocation: coords,
         alerts: [newAlert, ...safetyState.alerts],
       };
       setSafetyState(newState);
       saveSafetyState(newState);
 
-      // Simulate sending alert to first batch of nearby responders
       console.log('🚨 DISTRESS SIGNAL SENT TO ALL DEVICES');
       console.log('📍 Location:', newAlert.location);
       console.log('👥 Sending to batch 1 (10 nearby responders)...');
@@ -359,7 +370,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       // Set up automatic batch escalation if no response
       setTimeout(() => {
         checkAndEscalateAlert(newAlert.id);
-      }, 2 * 60 * 1000); // Check after 2 minutes
+      }, 2 * 60 * 1000);
     } catch (error) {
       console.error('❌ Failed to send alert:', error);
     }
@@ -383,7 +394,6 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       
       await DatabaseService.createAlertResponse(alertResponse);
 
-      // Update alert status if responding
       if (response === 'respond') {
         await DatabaseService.updateAlert(alertId, { status: 'acknowledged' });
       }
