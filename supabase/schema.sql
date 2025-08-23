@@ -65,7 +65,7 @@ alter table public.profiles enable row level security;
 alter table public.alerts enable row level security;
 alter table public.alert_responses enable row level security;
 
--- Profiles: users can select/update only their own profile, insert on sign-up via edge function or client with service role
+-- Profiles policies
 do $$ begin
   create policy "Profiles are viewable by self" on public.profiles for select using (auth.uid() = id);
 exception when duplicate_object then null; end $$;
@@ -76,32 +76,19 @@ do $$ begin
   create policy "Profiles are insertable by self" on public.profiles for insert with check (auth.uid() = id);
 exception when duplicate_object then null; end $$;
 
--- Alerts: owner can manage, responders can read if related by response, or broaden with geo policies later
+-- Alerts policies (owner-only, non-recursive)
 do $$ begin
-  create policy "Alert owner can crud" on public.alerts
-    for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+  create policy "alerts_owner_all" on public.alerts for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
 
+-- Alert responses policies
 do $$ begin
-  create policy "Responders can read responded alerts" on public.alerts
-    for select using (exists (
-      select 1 from public.alert_responses ar
-      where ar.alert_id = alerts.id and ar.user_id = auth.uid()
-    ));
+  create policy "alert_responses_insert_self" on public.alert_responses for insert with check (auth.uid() = user_id);
 exception when duplicate_object then null; end $$;
-
--- Alert responses: user can insert their own responses; readable by owner and responders
 do $$ begin
-  create policy "Users insert own responses" on public.alert_responses
-    for insert with check (auth.uid() = user_id);
-exception when duplicate_object then null; end $$;
-
-do $$ begin
-  create policy "Owner and responders can read responses" on public.alert_responses
-    for select using (
-      exists (select 1 from public.alerts a where a.id = alert_id and a.user_id = auth.uid())
-      or user_id = auth.uid()
-    );
+  create policy "alert_responses_select_owner_or_self" on public.alert_responses for select using (
+    user_id = auth.uid() or exists (select 1 from public.alerts a where a.id = alert_id and a.user_id = auth.uid())
+  );
 exception when duplicate_object then null; end $$;
 
 -- Realtime
