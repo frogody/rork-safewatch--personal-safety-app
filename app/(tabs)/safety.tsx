@@ -290,11 +290,10 @@ export default function SafetyScreen() {
     }
     setCountdown(null);
     setIsPreAlarm(false);
-    Alert.alert(
-      'Distress Signal Sent',
-      'Your distress signal has been sent to nearby SafeWatch users and emergency contacts.',
-      [{ text: 'OK' }]
-    );
+    try {
+      const { router } = await import('expo-router');
+      router.push('/distress');
+    } catch {}
   };
 
   const cancelCountdown = () => {

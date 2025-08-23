@@ -84,10 +84,16 @@ export class DatabaseService {
   static async createAlert(alert: Omit<DatabaseAlert, 'created_at' | 'updated_at'>): Promise<DatabaseAlert> {
     try {
       const now = new Date().toISOString();
+      // Ensure row-level security passes: user_id must equal auth.uid()
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw authErr;
+      const authedUserId = authData.user?.id;
+      if (!authedUserId) throw new Error('Not authenticated');
       const { data, error } = await supabase
         .from('alerts')
         .insert({
           ...alert,
+          user_id: authedUserId,
           created_at: now,
           updated_at: now,
         })
@@ -140,14 +146,11 @@ export class DatabaseService {
       const fileInfo = await FileSystem.getInfoAsync(localUri, { size: true });
       if (!fileInfo.exists) return null;
       const filePath = `${alertId}/${Date.now()}.m4a`;
-      const file = {
-        uri: localUri,
-        name: 'recording.m4a',
-        type: 'audio/m4a',
-      } as any;
+      const res = await fetch(localUri);
+      const blob = await res.blob();
       const { data, error } = await supabase.storage
         .from('alert-audio')
-        .upload(filePath, file, { contentType: 'audio/m4a', upsert: true });
+        .upload(filePath, blob, { contentType: 'audio/m4a', upsert: true });
       if (error) throw error;
       const { data: pub } = supabase.storage.from('alert-audio').getPublicUrl(filePath);
       const publicUrl = pub?.publicUrl ?? null;
