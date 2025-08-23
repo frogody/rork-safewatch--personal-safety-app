@@ -112,7 +112,7 @@ export class DatabaseService {
       const { data, error } = await supabase
         .from('alerts')
         .select('*')
-        .in('status', ['active','acknowledged','resolved'])
+        .eq('status', 'active')
         .order('timestamp', { ascending: false });
       if (error) throw error;
       return (data as DatabaseAlert[]) ?? [];

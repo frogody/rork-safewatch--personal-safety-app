@@ -48,6 +48,10 @@ export default function DistressScreen() {
     try {
       await DatabaseService.updateAlert(activeAlert.id, { status: 'resolved' });
       await refetchAlerts();
+      // Stop any ongoing vibration/alarm on this device
+      if (Platform.OS !== 'web') {
+        try { await Audio.setAudioModeAsync({ allowsRecordingIOS: false }); } catch {}
+      }
       router.replace('/(tabs)/safety');
     } catch (e) {
       setIsCancelling(false);

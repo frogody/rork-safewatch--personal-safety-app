@@ -378,12 +378,6 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       setTimeout(() => {
         checkAndEscalateAlert(newAlert.id);
       }, 2 * 60 * 1000);
-
-      // Navigate to active distress screen
-      try {
-        const { router } = await import('expo-router');
-        router.push('/distress');
-      } catch {}
     } catch (error) {
       console.error('❌ Failed to send alert:', error);
     }

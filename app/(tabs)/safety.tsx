@@ -15,6 +15,7 @@ import { Shield, MapPin, Clock, AlertTriangle, Users, X, Phone, HelpCircle, Navi
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
 import { router } from 'expo-router';
 import { useSafetyStore } from '@/store/safety-store';
 import { DatabaseService } from '@/services/database';
@@ -131,14 +132,38 @@ export default function SafetyScreen() {
         soundRef.current = null;
       }
       try {
+        // Try bundled asset first
         const module = require('../../assets/sounds/pre-alarm.mp3');
-        const { sound } = await Audio.Sound.createAsync(module, { shouldPlay: true, volume: 0.6 });
+        const { sound } = await Audio.Sound.createAsync(module, { shouldPlay: true, volume: 0.8 });
         soundRef.current = sound;
       } catch {
-        if (Platform.OS !== 'web') Vibration.vibrate(150);
+        // Fallback: generate/play a short tone file from base64
+        try {
+          const toneUri = await getFallbackToneUri();
+          const { sound } = await Audio.Sound.createAsync({ uri: toneUri }, { shouldPlay: true, volume: 0.9 });
+          soundRef.current = sound;
+        } catch {
+          if (Platform.OS !== 'web') Vibration.vibrate(150);
+        }
       }
     } catch (error) {
       if (Platform.OS !== 'web') Vibration.vibrate(150);
+    }
+  };
+
+  const getFallbackToneUri = async (): Promise<string> => {
+    // 200ms 1kHz mono WAV @ 16kHz, pre-generated base64 (small file)
+    const base64Wav =
+      'UklGRlQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQwAAAABAICAv8D/YP9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL9g/2D/YL8=';
+    const path = FileSystem.cacheDirectory + 'fallback-tone.wav';
+    try {
+      const info = await FileSystem.getInfoAsync(path);
+      if (!info.exists) {
+        await FileSystem.writeAsStringAsync(path, base64Wav, { encoding: FileSystem.EncodingType.Base64 });
+      }
+      return path;
+    } catch {
+      return path;
     }
   };
 
@@ -257,6 +282,8 @@ export default function SafetyScreen() {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
     }
     await triggerAlert();
+    // Navigate immediately to Distress screen so the user can cancel/act
+    try { router.push('/distress'); } catch {}
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (perm.status === 'granted') {
@@ -290,10 +317,6 @@ export default function SafetyScreen() {
     }
     setCountdown(null);
     setIsPreAlarm(false);
-    try {
-      const { router } = await import('expo-router');
-      router.push('/distress');
-    } catch {}
   };
 
   const cancelCountdown = () => {
