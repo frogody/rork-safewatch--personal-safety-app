@@ -42,6 +42,7 @@ export interface DatabaseAlert {
   max_batches?: number;
   responders_per_batch?: number;
   total_responders?: number;
+  audio_url?: string;
   created_at: string;
   updated_at: string;
 }

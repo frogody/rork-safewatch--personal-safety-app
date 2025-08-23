@@ -1,4 +1,5 @@
 import { supabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
+import * as FileSystem from 'expo-file-system';
 
 // Database service functions
 export class DatabaseService {
@@ -131,6 +132,32 @@ export class DatabaseService {
     } catch (error) {
       console.error('❌ Error updating alert:', error);
       throw error;
+    }
+  }
+
+  static async uploadAlertAudio(alertId: string, localUri: string): Promise<string | null> {
+    try {
+      const fileInfo = await FileSystem.getInfoAsync(localUri, { size: true });
+      if (!fileInfo.exists) return null;
+      const filePath = `${alertId}/${Date.now()}.m4a`;
+      const file = {
+        uri: localUri,
+        name: 'recording.m4a',
+        type: 'audio/m4a',
+      } as any;
+      const { data, error } = await supabase.storage
+        .from('alert-audio')
+        .upload(filePath, file, { contentType: 'audio/m4a', upsert: true });
+      if (error) throw error;
+      const { data: pub } = supabase.storage.from('alert-audio').getPublicUrl(filePath);
+      const publicUrl = pub?.publicUrl ?? null;
+      if (publicUrl) {
+        await this.updateAlert(alertId, { audio_url: publicUrl } as any);
+      }
+      return publicUrl;
+    } catch (e) {
+      console.error('❌ Upload audio failed', e);
+      return null;
     }
   }
 

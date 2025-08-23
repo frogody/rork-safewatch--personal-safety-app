@@ -17,6 +17,7 @@ import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 import { router } from 'expo-router';
 import { useSafetyStore } from '@/store/safety-store';
+import { DatabaseService } from '@/services/database';
 import { useAuth } from '@/store/auth-store';
 import { Colors } from '@/constants/colors';
 
@@ -130,8 +131,7 @@ export default function SafetyScreen() {
         await soundRef.current.unloadAsync();
       }
 
-      // Use system beep sound for pre-alarm
-      console.log('🔊 Pre-alarm sound started (using system beep)');
+      console.log('🔊 Pre-alarm sound');
       
       // For web and mobile, use vibration as primary alert
       if (Platform.OS !== 'web') {
@@ -139,7 +139,6 @@ export default function SafetyScreen() {
         Vibration.vibrate([0, 500, 200, 500], true);
       }
       
-      // Skip audio file loading for now
       const sound = null;
       
       soundRef.current = sound;
@@ -173,6 +172,13 @@ export default function SafetyScreen() {
         setCountdown(prev => {
           if (prev === null) return null;
           
+          if (prev === 31) {
+            // Start continuous vibration from 30s down
+            if (Platform.OS !== 'web') {
+              Vibration.vibrate(1000, true);
+            }
+          }
+
           if (prev === 16) {
             // Start pre-alarm phase
             setIsPreAlarm(true);
@@ -257,7 +263,7 @@ export default function SafetyScreen() {
     setIsPreAlarm(false);
   };
 
-  const handleDistressSignal = () => {
+  const handleDistressSignal = async () => {
     if (Platform.OS !== 'web') {
       Vibration.cancel();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -266,7 +272,39 @@ export default function SafetyScreen() {
     // Stop alarm sound
     stopAlarmSound();
     
-    triggerAlert();
+    await triggerAlert();
+    // After sending alert: record 15s audio clip
+    try {
+      const perm = await Audio.requestPermissionsAsync();
+      if (perm.status === 'granted') {
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        const recording = new Audio.Recording();
+        await recording.prepareToRecordAsync(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
+        await recording.startAsync();
+        setTimeout(async () => {
+          try {
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
+            if (uri) {
+              try {
+                const { useSafetyStore } = await import('@/store/safety-store');
+                const store = useSafetyStore.getState();
+                const alertId = store.lastAlertId || '';
+                if (alertId) {
+                  await DatabaseService.uploadAlertAudio(alertId, uri);
+                }
+              } catch {}
+            }
+          } catch (e) {}
+          // Start loud alarm until user stops
+          if (Platform.OS !== 'web') {
+            Vibration.vibrate([0, 1000, 200, 1000], true);
+          }
+        }, 15000);
+      }
+    } catch (e) {
+      console.log('Recording failed', e);
+    }
     setCountdown(null);
     setIsPreAlarm(false);
     

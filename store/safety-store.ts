@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import * as Location from 'expo-location';
+import * as FileSystem from 'expo-file-system';
 import { DatabaseService } from '@/services/database';
 import type { DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
 import { useAuth } from './auth-store';
@@ -29,6 +30,7 @@ export interface SafetyAlert {
   maxBatches?: number;
   respondersPerBatch?: number;
   totalResponders?: number;
+  audioUrl?: string;
 }
 
 export interface SafetySettings {
@@ -66,6 +68,7 @@ interface SafetyState {
   alerts: SafetyAlert[];
   settings: SafetySettings;
   journey: JourneyMonitoring;
+  lastAlertId: string | null;
 }
 
 const SAFETY_STORAGE_KEY = '@safewatch_safety';
@@ -94,6 +97,7 @@ function dbAlertToAppAlert(dbAlert: DatabaseAlert, responses: DatabaseAlertRespo
     maxBatches: dbAlert.max_batches,
     respondersPerBatch: dbAlert.responders_per_batch,
     totalResponders: dbAlert.total_responders,
+    audioUrl: dbAlert.audio_url,
   };
 }
 
@@ -113,6 +117,7 @@ function appAlertToDbAlert(appAlert: SafetyAlert, userId: string): Omit<Database
     max_batches: appAlert.maxBatches,
     responders_per_batch: appAlert.respondersPerBatch,
     total_responders: appAlert.totalResponders,
+    audio_url: appAlert.audioUrl,
   };
 }
 
@@ -133,6 +138,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     currentLocation: null,
     alerts: [],
     settings: defaultSettings,
+    lastAlertId: null,
     journey: {
       isActive: false,
       destination: null,
@@ -356,6 +362,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         ...safetyState,
         currentLocation: coords,
         alerts: [newAlert, ...safetyState.alerts],
+        lastAlertId: newAlert.id,
       };
       setSafetyState(newState);
       saveSafetyState(newState);

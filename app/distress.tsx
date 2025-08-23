@@ -3,16 +3,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, Linking } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Phone, XCircle, ShieldAlert, MapPin, CheckCircle2 } from 'lucide-react-native';
+import { Phone, XCircle, ShieldAlert, MapPin, CheckCircle2, Play, Square } from 'lucide-react-native';
 import { Colors } from '@/constants/colors';
 import { useSafetyStore } from '@/store/safety-store';
 import { DatabaseService } from '@/services/database';
 import { getPrimaryContact } from '@/services/contacts';
+import { Audio } from 'expo-av';
 
 export default function DistressScreen() {
   const router = useRouter();
   const { alerts, refetchAlerts } = useSafetyStore();
   const [isCancelling, setIsCancelling] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const soundRef = React.useRef<Audio.Sound | null>(null);
   const [primaryPhone, setPrimaryPhone] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +54,32 @@ export default function DistressScreen() {
     }
   };
 
+  const togglePlay = async () => {
+    try {
+      if (!activeAlert?.audioUrl) return;
+      if (isPlaying) {
+        if (soundRef.current) {
+          await soundRef.current.stopAsync();
+          await soundRef.current.unloadAsync();
+          soundRef.current = null;
+        }
+        setIsPlaying(false);
+        return;
+      }
+      const { sound } = await Audio.Sound.createAsync({ uri: activeAlert.audioUrl }, { shouldPlay: true });
+      soundRef.current = sound;
+      setIsPlaying(true);
+      sound.setOnPlaybackStatusUpdate((status) => {
+        const s = status as any;
+        if (s.didJustFinish) {
+          setIsPlaying(false);
+          soundRef.current?.unloadAsync().catch(() => {});
+          soundRef.current = null;
+        }
+      });
+    } catch {}
+  };
+
   const coordText = activeAlert ? `${activeAlert.location.latitude.toFixed(5)}, ${activeAlert.location.longitude.toFixed(5)}` : 'Locating…';
 
   return (
@@ -86,6 +115,13 @@ export default function DistressScreen() {
           <Phone color={Colors.black} size={24} />
           <Text style={styles.actionText}>Call Emergency Contact</Text>
         </TouchableOpacity>
+
+        {activeAlert?.audioUrl && (
+          <TouchableOpacity style={[styles.actionBtn, styles.call]} onPress={togglePlay}>
+            {isPlaying ? <Square color={Colors.black} size={24} /> : <Play color={Colors.black} size={24} />}
+            <Text style={styles.actionText}>{isPlaying ? 'Stop Audio' : 'Play Audio'}</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.statusRow}>

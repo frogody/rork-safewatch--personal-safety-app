@@ -31,6 +31,7 @@ import {
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
+import { Audio } from 'expo-av';
 import { useSafetyStore } from '@/store/safety-store';
 import { useAuth } from '@/store/auth-store';
 import { Colors } from '@/constants/colors';
@@ -138,6 +139,8 @@ export default function MapScreen() {
   const [currentLocation, setCurrentLocation] = useState<Location.LocationObject['coords'] | null>(null);
   const [selectedAlert, setSelectedAlert] = useState<typeof alerts[number] | null>(null);
   const [respondingToAlert, setRespondingToAlert] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
   const [destination, setDestination] = useState<string>('');
   interface PlaceSuggestion {
     id: string;
@@ -189,6 +192,14 @@ export default function MapScreen() {
     return () => {
       cleanupWatch();
       clearIntervals();
+      (async () => {
+        try {
+          if (soundRef.current) {
+            await soundRef.current.unloadAsync();
+            soundRef.current = null;
+          }
+        } catch {}
+      })();
     };
   }, []);
 
@@ -315,6 +326,38 @@ export default function MapScreen() {
         return Colors.textMuted;
     }
   };
+
+  const stopAudio = useCallback(async () => {
+    try {
+      if (soundRef.current) {
+        await soundRef.current.stopAsync();
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+    } catch {}
+    setPlayingId(null);
+  }, []);
+
+  const playAlertAudio = useCallback(async (id: string, url: string) => {
+    try {
+      if (playingId === id) {
+        await stopAudio();
+        return;
+      }
+      await stopAudio();
+      const { sound } = await Audio.Sound.createAsync({ uri: url }, { shouldPlay: true });
+      soundRef.current = sound;
+      setPlayingId(id);
+      sound.setOnPlaybackStatusUpdate((status) => {
+        const s = status as any;
+        if (s.didJustFinish) {
+          stopAudio();
+        }
+      });
+    } catch (e) {
+      setPlayingId(null);
+    }
+  }, [playingId, stopAudio]);
 
   const focusOnAlert = (alert: typeof alerts[number]) => {
     setSelectedAlert(alert);
@@ -632,6 +675,20 @@ export default function MapScreen() {
                       {alert.responseDeadline ? (isExpired ? 'Response time expired' : `Response time: ${timeRemaining}`) : 'Response time: —'}
                     </Text>
                   </View>
+                  {alert.audioUrl && (
+                    <View style={styles.actionButtons}>
+                      <TouchableOpacity style={styles.audioButton} onPress={() => playAlertAudio(alert.id, alert.audioUrl!)}>
+                        {playingId === alert.id ? (
+                          <Square color={Colors.text} size={16} />
+                        ) : (
+                          <Play color={Colors.black} size={16} />
+                        )}
+                        <Text style={playingId === alert.id ? styles.respondButtonText : styles.acknowledgeButtonText}>
+                          {playingId === alert.id ? 'Stop Audio' : 'Play Audio'}
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
 
                 {alert.status === 'active' && !isResponding && (
