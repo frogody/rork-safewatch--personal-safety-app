@@ -1,20 +1,28 @@
-import { supabase, mockDatabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
+import { supabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
 
 // Database service functions
 export class DatabaseService {
   // User operations
   static async createUser(user: Omit<DatabaseUser, 'created_at' | 'updated_at'>): Promise<DatabaseUser> {
     try {
-      // For demo, use mock database
-      const newUser: DatabaseUser = {
-        ...user,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-      
-      mockDatabase.users.set(user.id, newUser);
-      console.log('✅ User created in database:', user.email);
-      return newUser;
+      const { data, error } = await supabase
+        .from('profiles')
+        .insert({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          user_type: user.user_type,
+          phone_number: user.phone_number,
+          is_email_verified: user.is_email_verified,
+          is_phone_verified: user.is_phone_verified,
+          is_verified: user.is_verified,
+          profile_complete: user.profile_complete,
+        })
+        .select('*')
+        .single();
+
+      if (error) throw error;
+      return data as DatabaseUser;
     } catch (error) {
       console.error('❌ Error creating user:', error);
       throw error;
@@ -23,15 +31,13 @@ export class DatabaseService {
 
   static async getUserByEmail(email: string): Promise<DatabaseUser | null> {
     try {
-      // For demo, search mock database
-      for (const user of mockDatabase.users.values()) {
-        if (user.email === email) {
-          console.log('✅ User found in database:', email);
-          return user;
-        }
-      }
-      console.log('❌ User not found in database:', email);
-      return null;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('email', email)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as DatabaseUser) ?? null;
     } catch (error) {
       console.error('❌ Error getting user by email:', error);
       throw error;
@@ -40,13 +46,13 @@ export class DatabaseService {
 
   static async getUserById(id: string): Promise<DatabaseUser | null> {
     try {
-      const user = mockDatabase.users.get(id);
-      if (user) {
-        console.log('✅ User found by ID:', id);
-        return user;
-      }
-      console.log('❌ User not found by ID:', id);
-      return null;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as DatabaseUser) ?? null;
     } catch (error) {
       console.error('❌ Error getting user by ID:', error);
       throw error;
@@ -55,21 +61,18 @@ export class DatabaseService {
 
   static async updateUser(id: string, updates: Partial<DatabaseUser>): Promise<DatabaseUser | null> {
     try {
-      const existingUser = mockDatabase.users.get(id);
-      if (!existingUser) {
-        console.log('❌ User not found for update:', id);
-        return null;
-      }
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*')
+        .single();
 
-      const updatedUser: DatabaseUser = {
-        ...existingUser,
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-
-      mockDatabase.users.set(id, updatedUser);
-      console.log('✅ User updated in database:', id);
-      return updatedUser;
+      if (error) throw error;
+      return data as DatabaseUser;
     } catch (error) {
       console.error('❌ Error updating user:', error);
       throw error;
@@ -79,19 +82,18 @@ export class DatabaseService {
   // Alert operations
   static async createAlert(alert: Omit<DatabaseAlert, 'created_at' | 'updated_at'>): Promise<DatabaseAlert> {
     try {
-      const newAlert: DatabaseAlert = {
-        ...alert,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
-
-      mockDatabase.alerts.set(alert.id, newAlert);
-      console.log('🚨 Alert created in database:', alert.id);
-      
-      // Broadcast to all connected clients (simulate real-time)
-      this.broadcastAlert(newAlert);
-      
-      return newAlert;
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('alerts')
+        .insert({
+          ...alert,
+          created_at: now,
+          updated_at: now,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseAlert;
     } catch (error) {
       console.error('❌ Error creating alert:', error);
       throw error;
@@ -100,9 +102,12 @@ export class DatabaseService {
 
   static async getAlerts(): Promise<DatabaseAlert[]> {
     try {
-      const alerts = Array.from(mockDatabase.alerts.values());
-      console.log('✅ Retrieved alerts from database:', alerts.length);
-      return alerts.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('*')
+        .order('timestamp', { ascending: false });
+      if (error) throw error;
+      return (data as DatabaseAlert[]) ?? [];
     } catch (error) {
       console.error('❌ Error getting alerts:', error);
       throw error;
@@ -111,25 +116,17 @@ export class DatabaseService {
 
   static async updateAlert(id: string, updates: Partial<DatabaseAlert>): Promise<DatabaseAlert | null> {
     try {
-      const existingAlert = mockDatabase.alerts.get(id);
-      if (!existingAlert) {
-        console.log('❌ Alert not found for update:', id);
-        return null;
-      }
-
-      const updatedAlert: DatabaseAlert = {
-        ...existingAlert,
-        ...updates,
-        updated_at: new Date().toISOString(),
-      };
-
-      mockDatabase.alerts.set(id, updatedAlert);
-      console.log('✅ Alert updated in database:', id);
-      
-      // Broadcast update to all connected clients
-      this.broadcastAlert(updatedAlert);
-      
-      return updatedAlert;
+      const { data, error } = await supabase
+        .from('alerts')
+        .update({
+          ...updates,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseAlert;
     } catch (error) {
       console.error('❌ Error updating alert:', error);
       throw error;
@@ -139,21 +136,16 @@ export class DatabaseService {
   // Alert response operations
   static async createAlertResponse(response: Omit<DatabaseAlertResponse, 'created_at'>): Promise<DatabaseAlertResponse> {
     try {
-      const newResponse: DatabaseAlertResponse = {
-        ...response,
-        created_at: new Date().toISOString(),
-      };
-
-      const existingResponses = mockDatabase.alertResponses.get(response.alert_id) || [];
-      existingResponses.push(newResponse);
-      mockDatabase.alertResponses.set(response.alert_id, existingResponses);
-
-      console.log('✅ Alert response created in database:', response.alert_id);
-      
-      // Broadcast response to all connected clients
-      this.broadcastAlertResponse(newResponse);
-      
-      return newResponse;
+      const { data, error } = await supabase
+        .from('alert_responses')
+        .insert({
+          ...response,
+          created_at: new Date().toISOString(),
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseAlertResponse;
     } catch (error) {
       console.error('❌ Error creating alert response:', error);
       throw error;
@@ -162,90 +154,72 @@ export class DatabaseService {
 
   static async getAlertResponses(alertId: string): Promise<DatabaseAlertResponse[]> {
     try {
-      const responses = mockDatabase.alertResponses.get(alertId) || [];
-      console.log('✅ Retrieved alert responses from database:', alertId, responses.length);
-      return responses.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+      const { data, error } = await supabase
+        .from('alert_responses')
+        .select('*')
+        .eq('alert_id', alertId)
+        .order('timestamp', { ascending: true });
+      if (error) throw error;
+      return (data as DatabaseAlertResponse[]) ?? [];
     } catch (error) {
       console.error('❌ Error getting alert responses:', error);
       throw error;
     }
   }
 
-  // Real-time broadcasting (simulate Supabase real-time)
-  private static alertSubscribers: ((alert: DatabaseAlert) => void)[] = [];
-  private static responseSubscribers: ((response: DatabaseAlertResponse) => void)[] = [];
+  // Real-time subscriptions via Supabase
+  private static alertsChannel: ReturnType<typeof supabase.channel> | null = null;
+  private static responsesChannel: ReturnType<typeof supabase.channel> | null = null;
 
   static subscribeToAlerts(callback: (alert: DatabaseAlert) => void): () => void {
-    this.alertSubscribers.push(callback);
-    console.log('📡 Subscribed to alerts, total subscribers:', this.alertSubscribers.length);
-    
+    if (!this.alertsChannel) {
+      this.alertsChannel = supabase.channel('alerts-changes');
+      this.alertsChannel
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alerts' }, (payload) => {
+          const newRecord = payload.new as DatabaseAlert;
+          if (newRecord) {
+            callback(newRecord);
+          }
+        })
+        .subscribe();
+    }
+
+    // Return unsubscribe that unsubscribes the channel if no other listeners are required
     return () => {
-      const index = this.alertSubscribers.indexOf(callback);
-      if (index > -1) {
-        this.alertSubscribers.splice(index, 1);
-        console.log('📡 Unsubscribed from alerts, remaining subscribers:', this.alertSubscribers.length);
+      if (this.alertsChannel) {
+        supabase.removeChannel(this.alertsChannel);
+        this.alertsChannel = null;
       }
     };
   }
 
   static subscribeToAlertResponses(callback: (response: DatabaseAlertResponse) => void): () => void {
-    this.responseSubscribers.push(callback);
-    console.log('📡 Subscribed to alert responses, total subscribers:', this.responseSubscribers.length);
-    
+    if (!this.responsesChannel) {
+      this.responsesChannel = supabase.channel('alert-responses-changes');
+      this.responsesChannel
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'alert_responses' }, (payload) => {
+          const newRecord = payload.new as DatabaseAlertResponse;
+          if (newRecord) {
+            callback(newRecord);
+          }
+        })
+        .subscribe();
+    }
+
     return () => {
-      const index = this.responseSubscribers.indexOf(callback);
-      if (index > -1) {
-        this.responseSubscribers.splice(index, 1);
-        console.log('📡 Unsubscribed from alert responses, remaining subscribers:', this.responseSubscribers.length);
+      if (this.responsesChannel) {
+        supabase.removeChannel(this.responsesChannel);
+        this.responsesChannel = null;
       }
     };
-  }
-
-  private static broadcastAlert(alert: DatabaseAlert): void {
-    console.log('📡 Broadcasting alert to', this.alertSubscribers.length, 'subscribers');
-    this.alertSubscribers.forEach(callback => {
-      try {
-        callback(alert);
-      } catch (error) {
-        console.error('❌ Error in alert subscriber callback:', error);
-      }
-    });
-  }
-
-  private static broadcastAlertResponse(response: DatabaseAlertResponse): void {
-    console.log('📡 Broadcasting alert response to', this.responseSubscribers.length, 'subscribers');
-    this.responseSubscribers.forEach(callback => {
-      try {
-        callback(response);
-      } catch (error) {
-        console.error('❌ Error in response subscriber callback:', error);
-      }
-    });
   }
 
   // Authentication helpers
   static async authenticateUser(email: string, password: string): Promise<DatabaseUser | null> {
     try {
-      // Demo authentication
-      const demoCredentials = {
-        'seeker@safewatch.com': 'demo123',
-        'responder@safewatch.com': 'demo123',
-      };
-
-      const validPassword = demoCredentials[email as keyof typeof demoCredentials];
-      if (!validPassword || validPassword !== password) {
-        console.log('❌ Invalid credentials for:', email);
-        return null;
-      }
-
+      // Placeholder: Use Supabase Auth in auth-store instead. Here, we simply lookup profile by email.
       const user = await this.getUserByEmail(email);
-      if (user) {
-        console.log('✅ User authenticated successfully:', email);
-        return user;
-      }
-
-      console.log('❌ User not found after authentication:', email);
-      return null;
+      return user;
     } catch (error) {
       console.error('❌ Error authenticating user:', error);
       throw error;

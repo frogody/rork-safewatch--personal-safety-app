@@ -1,11 +1,16 @@
 import { createClient } from '@supabase/supabase-js';
+import Constants from 'expo-constants';
 
-// Replace these with your actual Supabase project URL and anon key
-// For demo purposes, using a public demo instance
-const supabaseUrl = 'https://xyzcompany.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5emNvbXBhbnkiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTY0NTU2NzI0MCwiZXhwIjoxOTYxMTQzMjQwfQ.Wd0F7o8rRoweEka6ia9jFWBqNsM0o4ojfpWbJkMg_8U';
+const supabaseUrl = (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined)
+  || (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_SUPABASE_URL;
+const supabaseAnonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined)
+  || (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.warn('Supabase URL/key are not set. Please set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.');
+}
+
+export const supabase = createClient(supabaseUrl ?? '', supabaseAnonKey ?? '');
 
 // Database table schemas
 export interface DatabaseUser {
@@ -49,75 +54,3 @@ export interface DatabaseAlertResponse {
   action: 'acknowledge' | 'respond';
   created_at: string;
 }
-
-// Mock database functions for demo (replace with actual Supabase calls)
-export const mockDatabase = {
-  users: new Map<string, DatabaseUser>(),
-  alerts: new Map<string, DatabaseAlert>(),
-  alertResponses: new Map<string, DatabaseAlertResponse[]>(),
-  
-  // Initialize with demo data
-  init() {
-    // Demo users
-    const seekerUser: DatabaseUser = {
-      id: 'demo-seeker-1',
-      email: 'seeker@safewatch.com',
-      name: 'Sarah Johnson',
-      user_type: 'safety-seeker',
-      phone_number: '+1 (555) 123-4567',
-      is_email_verified: true,
-      is_phone_verified: true,
-      is_verified: true,
-      profile_complete: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    
-    const responderUser: DatabaseUser = {
-      id: 'demo-responder-1',
-      email: 'responder@safewatch.com',
-      name: 'Mike Thompson',
-      user_type: 'responder',
-      phone_number: '+1 (555) 987-6543',
-      is_email_verified: true,
-      is_phone_verified: true,
-      is_verified: true,
-      profile_complete: true,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    
-    this.users.set(seekerUser.id, seekerUser);
-    this.users.set(responderUser.id, responderUser);
-    
-    // Demo alerts
-    const alert1: DatabaseAlert = {
-      id: '1',
-      title: 'Safety Alert from Sarah M.',
-      description: 'User has not moved for 5 minutes and may need assistance.',
-      timestamp: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-      latitude: 37.7749,
-      longitude: -122.4194,
-      address: '123 Market St, San Francisco, CA',
-      status: 'active',
-      user_id: 'demo-seeker-1',
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    };
-    
-    this.alerts.set(alert1.id, alert1);
-    this.alertResponses.set(alert1.id, [
-      {
-        id: 'response-1',
-        alert_id: alert1.id,
-        user_id: 'demo-responder-1',
-        timestamp: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
-        action: 'acknowledge',
-        created_at: new Date().toISOString(),
-      }
-    ]);
-  }
-};
-
-// Initialize mock database
-mockDatabase.init();

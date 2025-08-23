@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import createContextHook from '@nkzw/create-context-hook';
 import { DatabaseService } from '@/services/database';
+import { supabase } from '@/constants/supabase';
 import type { DatabaseUser } from '@/constants/supabase';
 
 export interface User {
@@ -66,6 +67,23 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   useEffect(() => {
     loadAuthState();
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        const dbUser = await DatabaseService.getUserById(session.user.id);
+        if (dbUser) {
+          const appUser = dbUserToAppUser(dbUser);
+          await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(appUser));
+          setAuthState(prev => ({ ...prev, user: appUser, isAuthenticated: true }));
+        }
+      } else {
+        await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
+        setAuthState(prev => ({ ...prev, user: null, isAuthenticated: false }));
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   const loadAuthState = async () => {
@@ -78,17 +96,14 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
       let user = authData ? JSON.parse(authData) : null;
       const hasCompletedOnboarding = onboardingData === 'true';
 
-      // If we have a user locally, try to sync with database
-      if (user) {
-        try {
-          const dbUser = await DatabaseService.getUserById(user.id);
-          if (dbUser) {
-            user = dbUserToAppUser(dbUser);
-            // Update local storage with latest data
-            await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
-          }
-        } catch (error) {
-          console.log('Could not sync with database, using local data:', error);
+      // Restore session from Supabase and fetch profile
+      const { data: sessionData } = await supabase.auth.getSession();
+      const sessionUser = sessionData.session?.user || null;
+      if (sessionUser) {
+        const dbUser = await DatabaseService.getUserById(sessionUser.id);
+        if (dbUser) {
+          user = dbUserToAppUser(dbUser);
+          await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
         }
       }
 
@@ -106,37 +121,26 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const signUp = useCallback(async (email: string, password: string, name: string, userType: 'safety-seeker' | 'responder') => {
     try {
-      // Check if user already exists
-      const existingUser = await DatabaseService.getUserByEmail(email);
-      if (existingUser) {
-        return { success: false, error: 'User already exists' };
-      }
+      const { data, error } = await supabase.auth.signUp({ email, password });
+      if (error) return { success: false, error: error.message };
+      const authUser = data.user;
+      if (!authUser) return { success: false, error: 'No user returned from sign up' };
 
-      const user: User = {
-        id: Date.now().toString(),
+      const profile: User = {
+        id: authUser.id,
         email,
         name,
         userType,
-        isEmailVerified: false,
+        isEmailVerified: !!authUser.email_confirmed_at,
         isPhoneVerified: false,
         isVerified: false,
         profileComplete: false,
       };
 
-      // Create user in database
-      const dbUser = await DatabaseService.createUser(appUserToDbUser(user));
-      const createdUser = dbUserToAppUser(dbUser);
+      await DatabaseService.createUser(appUserToDbUser(profile));
 
-      // Store locally for offline access
-      await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(createdUser));
-      
-      setAuthState(prev => ({
-        ...prev,
-        user: createdUser,
-        isAuthenticated: true,
-      }));
-
-      console.log('🎉 User signed up successfully:', email);
+      await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(profile));
+      setAuthState(prev => ({ ...prev, user: profile, isAuthenticated: true }));
       return { success: true };
     } catch (error) {
       console.error('Sign up error:', error);
@@ -146,25 +150,17 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const signIn = useCallback(async (email: string, password: string) => {
     try {
-      // Authenticate with database
-      const dbUser = await DatabaseService.authenticateUser(email, password);
-      
-      if (!dbUser) {
-        return { success: false, error: 'Invalid credentials' };
-      }
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) return { success: false, error: error.message };
+      const authUser = data.user;
+      if (!authUser) return { success: false, error: 'No user returned from sign in' };
 
+      const dbUser = await DatabaseService.getUserById(authUser.id);
+      if (!dbUser) return { success: false, error: 'Profile not found' };
       const user = dbUserToAppUser(dbUser);
 
-      // Store locally for offline access
       await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
-      
-      setAuthState(prev => ({
-        ...prev,
-        user,
-        isAuthenticated: true,
-      }));
-
-      console.log('🎉 User signed in successfully:', email);
+      setAuthState(prev => ({ ...prev, user, isAuthenticated: true }));
       return { success: true };
     } catch (error) {
       console.error('Sign in error:', error);
@@ -174,6 +170,7 @@ export const [AuthProvider, useAuth] = createContextHook(() => {
 
   const signOut = useCallback(async () => {
     try {
+      await supabase.auth.signOut();
       await AsyncStorage.removeItem(AUTH_STORAGE_KEY);
       setAuthState({
         user: null,
