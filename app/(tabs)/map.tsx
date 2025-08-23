@@ -109,15 +109,22 @@ if (Platform.OS === 'web') {
   Marker = FallbackMarker;
   Circle = FallbackCircle;
 } else {
-  // Use real react-native-maps on mobile
+  // Use real react-native-maps on mobile - direct import for better reliability
   try {
-    const Maps = require('react-native-maps');
-    MapView = Maps.default || Maps;
-    Marker = Maps.Marker;
-    Circle = Maps.Circle;
+    const RNMaps = require('react-native-maps');
+    console.log('react-native-maps loaded successfully on mobile');
+    MapView = RNMaps.default || RNMaps.MapView || RNMaps;
+    Marker = RNMaps.Marker;
+    Circle = RNMaps.Circle;
+    
+    // Verify components are available
+    if (!MapView || !Marker || !Circle) {
+      console.warn('Some react-native-maps components are missing:', { MapView: !!MapView, Marker: !!Marker, Circle: !!Circle });
+      throw new Error('Missing components');
+    }
   } catch (error) {
-    console.log('Failed to load react-native-maps, using fallback:', error);
-    MapView = createFallbackMapView('Map unavailable');
+    console.error('Failed to load react-native-maps on mobile:', error);
+    MapView = createFallbackMapView('Map loading failed');
     Marker = FallbackMarker;
     Circle = FallbackCircle;
   }
