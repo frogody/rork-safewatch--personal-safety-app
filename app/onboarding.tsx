@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -83,7 +83,20 @@ const onboardingSteps: OnboardingStep[] = [
 
 export default function OnboardingScreen() {
   const [currentStep, setCurrentStep] = useState<number>(0);
-  const { completeOnboarding } = useAuth();
+  const { completeOnboarding, hasCompletedOnboarding, isAuthenticated, user } = useAuth();
+
+  // If onboarding already completed, redirect appropriately
+  useEffect(() => {
+    if (hasCompletedOnboarding) {
+      if (!isAuthenticated) {
+        router.replace('/signin');
+      } else if (user?.userType === 'responder') {
+        router.replace('/(tabs)/alerts');
+      } else {
+        router.replace('/(tabs)/safety');
+      }
+    }
+  }, [hasCompletedOnboarding, isAuthenticated, user?.userType]);
 
   const handleNext = () => {
     if (currentStep < onboardingSteps.length - 1) {

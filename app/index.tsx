@@ -8,7 +8,7 @@ import { useAuth } from '@/store/auth-store';
 import { Colors } from '@/constants/colors';
 
 export default function IndexScreen() {
-  const { isLoading, isAuthenticated, hasCompletedOnboarding } = useAuth();
+  const { isLoading, isAuthenticated, hasCompletedOnboarding, user } = useAuth();
 
   useEffect(() => {
     if (!isLoading) {
@@ -17,10 +17,15 @@ export default function IndexScreen() {
       } else if (!isAuthenticated) {
         router.replace('/signin');
       } else {
-        router.replace('/(tabs)/safety');
+        // Route based on user role to avoid dead-ends for responders
+        if (user?.userType === 'responder') {
+          router.replace('/(tabs)/alerts');
+        } else {
+          router.replace('/(tabs)/safety');
+        }
       }
     }
-  }, [isLoading, isAuthenticated, hasCompletedOnboarding]);
+  }, [isLoading, isAuthenticated, hasCompletedOnboarding, user?.userType]);
 
   return (
     <SafeAreaView style={styles.container}>
