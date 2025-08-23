@@ -125,30 +125,20 @@ export default function SafetyScreen() {
 
   const playAlarmSound = async () => {
     try {
-      // Stop any existing sound
       if (soundRef.current) {
-        await soundRef.current.stopAsync();
-        await soundRef.current.unloadAsync();
+        try { await soundRef.current.stopAsync(); } catch {}
+        try { await soundRef.current.unloadAsync(); } catch {}
+        soundRef.current = null;
       }
-
-      console.log('🔊 Pre-alarm sound');
-      
-      // For web and mobile, use vibration as primary alert
-      if (Platform.OS !== 'web') {
-        // Create a repeating vibration pattern
-        Vibration.vibrate([0, 500, 200, 500], true);
+      try {
+        const module = require('../../assets/sounds/pre-alarm.mp3');
+        const { sound } = await Audio.Sound.createAsync(module, { shouldPlay: true, volume: 0.6 });
+        soundRef.current = sound;
+      } catch {
+        if (Platform.OS !== 'web') Vibration.vibrate(150);
       }
-      
-      const sound = null;
-      
-      soundRef.current = sound;
-
     } catch (error) {
-      console.log('Error playing alarm sound:', error);
-      // Fallback to system beep if audio fails
-      if (Platform.OS !== 'web') {
-        Vibration.vibrate([0, 200, 100, 200], true);
-      }
+      if (Platform.OS !== 'web') Vibration.vibrate(150);
     }
   };
 
@@ -171,48 +161,39 @@ export default function SafetyScreen() {
       interval = setInterval(() => {
         setCountdown(prev => {
           if (prev === null) return null;
-          
-          if (prev === 31) {
-            // Start continuous vibration from 30s down
-            if (Platform.OS !== 'web') {
-              Vibration.vibrate(1000, true);
-            }
+
+          // 30s to 16s: short vibration pulse each second
+          if (prev <= 30 && prev > 15) {
+            if (Platform.OS !== 'web') Vibration.vibrate(120);
+          }
+
+          // 15s to 1s: subtle audio tick each second
+          if (prev <= 15 && prev > 1) {
+            playAlarmSound();
+            if (Platform.OS !== 'web') Haptics.selectionAsync().catch(() => {});
           }
 
           if (prev === 16) {
-            // Start pre-alarm phase
             setIsPreAlarm(true);
-            console.log('🚨 Pre-alarm phase started - playing alarm sound');
-            
-            // Start audio alarm
-            playAlarmSound();
-            
             if (Platform.OS !== 'web') {
               Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-              // Start vibration pattern for pre-alarm
-              Vibration.vibrate([0, 500, 200, 500], true);
             }
           }
-          
+
           if (prev <= 1) {
-            // Timer reached zero - will trigger distress signal
             return 0;
           }
-          
           return prev - 1;
         });
       }, 1000);
     }
     return () => {
       clearInterval(interval);
-      if (Platform.OS !== 'web') {
-        Vibration.cancel();
-      }
+      if (Platform.OS !== 'web') Vibration.cancel();
       stopAlarmSound();
     };
   }, [countdown]);
 
-  // Separate effect to handle distress signal when countdown reaches 0
   useEffect(() => {
     if (countdown === 0) {
       handleDistressSignal();
@@ -254,7 +235,7 @@ export default function SafetyScreen() {
     console.log('🚨 "I Feel Unsafe" button pressed');
     
     if (Platform.OS !== 'web') {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     }
     
     // Start timer immediately without confirmation dialog
@@ -263,17 +244,19 @@ export default function SafetyScreen() {
     setIsPreAlarm(false);
   };
 
-  const handleDistressSignal = async () => {
+  const stopAllAlerts = async () => {
+    await stopAlarmSound();
     if (Platform.OS !== 'web') {
       Vibration.cancel();
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
     }
-    
-    // Stop alarm sound
-    stopAlarmSound();
-    
+  };
+
+  const handleDistressSignal = async () => {
+    await stopAllAlerts();
+    if (Platform.OS !== 'web') {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+    }
     await triggerAlert();
-    // After sending alert: record 15s audio clip
     try {
       const perm = await Audio.requestPermissionsAsync();
       if (perm.status === 'granted') {
@@ -291,14 +274,14 @@ export default function SafetyScreen() {
                 const store = useSafetyStore.getState();
                 const alertId = store.lastAlertId || '';
                 if (alertId) {
+                  const { DatabaseService } = await import('@/services/database');
                   await DatabaseService.uploadAlertAudio(alertId, uri);
                 }
               } catch {}
             }
           } catch (e) {}
-          // Start loud alarm until user stops
           if (Platform.OS !== 'web') {
-            Vibration.vibrate([0, 1000, 200, 1000], true);
+            Vibration.vibrate([0, 800, 200, 800], true);
           }
         }, 15000);
       }
@@ -307,7 +290,6 @@ export default function SafetyScreen() {
     }
     setCountdown(null);
     setIsPreAlarm(false);
-    
     Alert.alert(
       'Distress Signal Sent',
       'Your distress signal has been sent to nearby SafeWatch users and emergency contacts.',
@@ -318,13 +300,9 @@ export default function SafetyScreen() {
   const cancelCountdown = () => {
     setCountdown(null);
     setIsPreAlarm(false);
-    
-    // Stop alarm sound and vibration
-    stopAlarmSound();
-    
+    stopAllAlerts();
     if (Platform.OS !== 'web') {
-      Vibration.cancel();
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     }
     
     console.log('⏹️ Safety timer cancelled by user');
