@@ -73,8 +73,8 @@
       "typedRoutes": true
     },
     "extra": {
-      "EXPO_PUBLIC_SUPABASE_URL": "",
-      "EXPO_PUBLIC_SUPABASE_ANON_KEY": ""
+      "EXPO_PUBLIC_SUPABASE_URL": "https://nsvmrooivrgvnhrgwtqk.supabase.co",
+      "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zdm1yb29pdnJndm5ocmd3dHFrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU5ODA1NjEsImV4cCI6MjA3MTU1NjU2MX0.1LlqtVZ1Vx6vL8IP0gsdN0oc-H3nQz8qccq0FA5wAM0"
     }
   }
 }
