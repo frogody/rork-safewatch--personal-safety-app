@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -24,33 +24,10 @@ import {
 } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { Colors } from '@/constants/colors';
-
-interface EmergencyContact {
-  id: string;
-  name: string;
-  phone: string;
-  relationship: string;
-  isPrimary: boolean;
-}
+import { loadContacts, saveContacts, type EmergencyContact } from '@/services/contacts';
 
 export default function EmergencyContactsScreen() {
-  const [contacts, setContacts] = useState<EmergencyContact[]>([
-    {
-      id: '1',
-      name: 'Sarah Johnson',
-      phone: '+1 (555) 123-4567',
-      relationship: 'Mother',
-      isPrimary: true,
-    },
-    {
-      id: '2',
-      name: 'Mike Thompson',
-      phone: '+1 (555) 987-6543',
-      relationship: 'Partner',
-      isPrimary: false,
-    },
-  ]);
-
+  const [contacts, setContacts] = useState<EmergencyContact[]>([]);
   const [showAddModal, setShowAddModal] = useState<boolean>(false);
   const [editingContact, setEditingContact] = useState<EmergencyContact | null>(null);
   const [formData, setFormData] = useState({
@@ -58,6 +35,13 @@ export default function EmergencyContactsScreen() {
     phone: '',
     relationship: '',
   });
+
+  useEffect(() => {
+    (async () => {
+      const stored = await loadContacts();
+      setContacts(stored);
+    })();
+  }, []);
 
   const handleBack = () => {
     router.back();
@@ -108,27 +92,27 @@ export default function EmergencyContactsScreen() {
     return true;
   };
 
+  const persist = async (updated: EmergencyContact[]) => {
+    setContacts(updated);
+    await saveContacts(updated);
+  };
+
   const handleSave = () => {
     if (!validateForm()) return;
 
     if (editingContact) {
-      // Update existing contact
-      setContacts(prev =>
-        prev.map(contact =>
-          contact.id === editingContact.id
-            ? { ...contact, ...formData }
-            : contact
-        )
+      const updated = contacts.map(contact =>
+        contact.id === editingContact.id ? { ...contact, ...formData } : contact
       );
+      persist(updated);
       Alert.alert('Success', 'Contact updated successfully');
     } else {
-      // Add new contact
       const newContact: EmergencyContact = {
         id: Date.now().toString(),
         ...formData,
         isPrimary: contacts.length === 0,
       };
-      setContacts(prev => [...prev, newContact]);
+      persist([...contacts, newContact]);
       Alert.alert('Success', 'Contact added successfully');
     }
 
@@ -147,28 +131,24 @@ export default function EmergencyContactsScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            setContacts(prev => {
-              const filtered = prev.filter(c => c.id !== contactId);
-              // If we deleted the primary contact, make the first remaining contact primary
-              if (contact.isPrimary && filtered.length > 0) {
-                filtered[0].isPrimary = true;
-              }
-              return filtered;
-            });
+          onPress: async () => {
+            const filtered = contacts.filter(c => c.id !== contactId);
+            if (contact.isPrimary && filtered.length > 0) {
+              filtered[0].isPrimary = true;
+            }
+            await persist(filtered);
           },
         },
       ]
     );
   };
 
-  const handleSetPrimary = (contactId: string) => {
-    setContacts(prev =>
-      prev.map(contact => ({
-        ...contact,
-        isPrimary: contact.id === contactId,
-      }))
-    );
+  const handleSetPrimary = async (contactId: string) => {
+    const updated = contacts.map(contact => ({
+      ...contact,
+      isPrimary: contact.id === contactId,
+    }));
+    await persist(updated);
     Alert.alert('Success', 'Primary contact updated');
   };
 

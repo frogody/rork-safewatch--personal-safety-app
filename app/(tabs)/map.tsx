@@ -132,61 +132,11 @@ if (Platform.OS === 'web') {
 
 const { width, height } = Dimensions.get('window');
 
-interface ActiveAlert {
-  id: string;
-  userId: string;
-  userName: string;
-  location: {
-    latitude: number;
-    longitude: number;
-    address?: string;
-  };
-  timestamp: Date;
-  status: 'pending' | 'acknowledged' | 'responding' | 'resolved';
-  responseDeadline: Date;
-  respondersCount: number;
-  maxResponders: number;
-}
-
-const mockActiveAlerts: ActiveAlert[] = [
-  {
-    id: 'alert-1',
-    userId: 'seeker-1',
-    userName: 'Sarah Johnson',
-    location: {
-      latitude: 37.7749,
-      longitude: -122.4194,
-      address: '123 Market St, San Francisco, CA',
-    },
-    timestamp: new Date(Date.now() - 30000), // 30 seconds ago
-    status: 'pending',
-    responseDeadline: new Date(Date.now() + 90000), // 90 seconds from now
-    respondersCount: 2,
-    maxResponders: 10,
-  },
-  {
-    id: 'alert-2',
-    userId: 'seeker-2',
-    userName: 'Emma Davis',
-    location: {
-      latitude: 37.7849,
-      longitude: -122.4094,
-      address: '456 Mission St, San Francisco, CA',
-    },
-    timestamp: new Date(Date.now() - 300000), // 5 minutes ago
-    status: 'acknowledged',
-    responseDeadline: new Date(Date.now() - 180000), // Expired
-    respondersCount: 8,
-    maxResponders: 10,
-  },
-];
-
 export default function MapScreen() {
   const { user } = useAuth();
-  const { respondToAlert, triggerAlert } = useSafetyStore();
+  const { respondToAlert, triggerAlert, alerts } = useSafetyStore();
   const [currentLocation, setCurrentLocation] = useState<Location.LocationObject['coords'] | null>(null);
-  const [activeAlerts, setActiveAlerts] = useState<ActiveAlert[]>(mockActiveAlerts);
-  const [selectedAlert, setSelectedAlert] = useState<ActiveAlert | null>(null);
+  const [selectedAlert, setSelectedAlert] = useState<typeof alerts[number] | null>(null);
   const [respondingToAlert, setRespondingToAlert] = useState<string | null>(null);
   const [destination, setDestination] = useState<string>('');
   interface PlaceSuggestion {
@@ -215,8 +165,6 @@ export default function MapScreen() {
 
   useEffect(() => {
     getCurrentLocation();
-    const interval = setInterval(updateAlertTimers, 1000);
-    return () => clearInterval(interval);
   }, []);
 
   useEffect(() => {
@@ -321,22 +269,7 @@ export default function MapScreen() {
     }
   };
 
-  const updateAlertTimers = () => {
-    setActiveAlerts(prev => 
-      prev.map(alert => {
-        const now = new Date();
-        if (alert.status === 'pending' && now > alert.responseDeadline) {
-          // Alert expired, send to next batch of responders
-          return {
-            ...alert,
-            responseDeadline: new Date(now.getTime() + 120000), // 2 more minutes
-            respondersCount: 0,
-          };
-        }
-        return alert;
-      })
-    );
-  };
+  // No local timers for alerts; backend manages escalation and realtime updates propagate to store
 
   const handleRespondToAlert = async (alertId: string) => {
     if (Platform.OS !== 'web') {
@@ -344,17 +277,6 @@ export default function MapScreen() {
     }
 
     setRespondingToAlert(alertId);
-    
-    // Update alert status
-    setActiveAlerts(prev => 
-      prev.map(alert => 
-        alert.id === alertId 
-          ? { ...alert, status: 'responding', respondersCount: alert.respondersCount + 1 }
-          : alert
-      )
-    );
-
-    // Call the store method
     respondToAlert(alertId, 'respond');
 
     Alert.alert(
@@ -369,14 +291,6 @@ export default function MapScreen() {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
 
-    setActiveAlerts(prev => 
-      prev.map(alert => 
-        alert.id === alertId 
-          ? { ...alert, status: 'acknowledged', respondersCount: alert.respondersCount + 1 }
-          : alert
-      )
-    );
-
     respondToAlert(alertId, 'acknowledge');
   };
 
@@ -390,22 +304,19 @@ export default function MapScreen() {
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
   };
 
-  const getAlertColor = (alert: ActiveAlert) => {
-    switch (alert.status) {
-      case 'pending':
+  const getAlertColor = (status: 'active' | 'acknowledged' | 'resolved') => {
+    switch (status) {
+      case 'active':
         return Colors.error;
       case 'acknowledged':
         return Colors.yellow;
-      case 'responding':
-        return Colors.success;
       case 'resolved':
-        return Colors.textMuted;
       default:
-        return Colors.error;
+        return Colors.textMuted;
     }
   };
 
-  const focusOnAlert = (alert: ActiveAlert) => {
+  const focusOnAlert = (alert: typeof alerts[number]) => {
     setSelectedAlert(alert);
     if (mapRef.current) {
       mapRef.current.animateToRegion({
@@ -657,18 +568,18 @@ export default function MapScreen() {
             </Marker>
           )}
 
-          {user.userType === 'responder' && activeAlerts.map((alert) => (
+          {user.userType === 'responder' && alerts.map((alert) => (
             <React.Fragment key={alert.id}>
               <Marker
                 coordinate={{
                   latitude: alert.location.latitude,
                   longitude: alert.location.longitude,
                 }}
-                title={`Alert from ${alert.userName}`}
+                title={alert.title}
                 description={alert.location.address}
                 onPress={() => focusOnAlert(alert)}
               >
-                <View style={[styles.alertMarker, { backgroundColor: getAlertColor(alert) }]}>
+                <View style={[styles.alertMarker, { backgroundColor: getAlertColor(alert.status) }]}>
                   <AlertTriangle color={Colors.text} size={20} />
                 </View>
               </Marker>
@@ -678,8 +589,8 @@ export default function MapScreen() {
                   longitude: alert.location.longitude,
                 }}
                 radius={500}
-                strokeColor={getAlertColor(alert)}
-                fillColor={`${getAlertColor(alert)}20`}
+                strokeColor={getAlertColor(alert.status)}
+                fillColor={`${getAlertColor(alert.status)}20`}
                 strokeWidth={2}
               />
             </React.Fragment>
@@ -689,9 +600,9 @@ export default function MapScreen() {
 
       {user.userType === 'responder' ? (
         <ScrollView style={styles.alertsList} showsVerticalScrollIndicator={false}>
-          <Text style={styles.alertsTitle}>Active Alerts ({activeAlerts.length})</Text>
-          {activeAlerts.map((alert) => {
-            const timeRemaining = getTimeRemaining(alert.responseDeadline);
+          <Text style={styles.alertsTitle}>Active Alerts ({alerts.length})</Text>
+          {alerts.map((alert) => {
+            const timeRemaining = alert.responseDeadline ? getTimeRemaining(alert.responseDeadline) : '—';
             const isExpired = timeRemaining === 'Expired';
             const isResponding = respondingToAlert === alert.id;
             return (
@@ -703,13 +614,13 @@ export default function MapScreen() {
               >
                 <View style={styles.alertHeader}>
                   <View style={styles.alertInfo}>
-                    <Text style={styles.alertUserName}>{alert.userName}</Text>
+                    <Text style={styles.alertUserName}>{alert.title}</Text>
                     <View style={styles.alertMeta}>
                       <MapPin color={Colors.textMuted} size={14} />
                       <Text style={styles.alertAddress}>{alert.location.address}</Text>
                     </View>
                   </View>
-                  <View style={[styles.statusBadge, { backgroundColor: getAlertColor(alert) }]}>
+                  <View style={[styles.statusBadge, { backgroundColor: getAlertColor(alert.status) }]}>
                     <Text style={styles.statusText}>{alert.status.toUpperCase()}</Text>
                   </View>
                 </View>
@@ -718,15 +629,12 @@ export default function MapScreen() {
                   <View style={styles.timerContainer}>
                     <Timer color={isExpired ? Colors.error : Colors.textMuted} size={16} />
                     <Text style={[styles.timerText, isExpired && styles.expiredText]}>
-                      {isExpired ? 'Response time expired' : `Response time: ${timeRemaining}`}
+                      {alert.responseDeadline ? (isExpired ? 'Response time expired' : `Response time: ${timeRemaining}`) : 'Response time: —'}
                     </Text>
                   </View>
-                  <Text style={styles.respondersCount}>
-                    {alert.respondersCount}/{alert.maxResponders} responders
-                  </Text>
                 </View>
 
-                {alert.status === 'pending' && !isResponding && (
+                {alert.status === 'active' && !isResponding && (
                   <View style={styles.actionButtons}>
                     <TouchableOpacity style={styles.acknowledgeButton} onPress={() => handleAcknowledgeAlert(alert.id)} testID={`acknowledge-${alert.id}`}>
                       <CheckCircle color={Colors.black} size={16} />
@@ -738,18 +646,11 @@ export default function MapScreen() {
                     </TouchableOpacity>
                   </View>
                 )}
-
-                {isResponding && (
-                  <View style={styles.respondingIndicator}>
-                    <CheckCircle color={Colors.success} size={20} />
-                    <Text style={styles.respondingText}>You are responding to this alert</Text>
-                  </View>
-                )}
               </TouchableOpacity>
             );
           })}
 
-          {activeAlerts.length === 0 && (
+          {alerts.length === 0 && (
             <View style={styles.noAlertsContainer}>
               <CheckCircle color={Colors.success} size={48} />
               <Text style={styles.noAlertsText}>No Active Alerts</Text>
