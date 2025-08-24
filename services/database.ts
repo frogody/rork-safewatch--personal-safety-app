@@ -141,6 +141,21 @@ export class DatabaseService {
     }
   }
 
+  static async getAlertById(id: string): Promise<DatabaseAlert | null> {
+    try {
+      const { data, error } = await supabase
+        .from('alerts')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as DatabaseAlert) ?? null;
+    } catch (error) {
+      console.error('❌ Error getting alert by ID:', error);
+      throw error;
+    }
+  }
+
   static async uploadAlertAudio(alertId: string, localUri: string): Promise<string | null> {
     try {
       const fileInfo = await FileSystem.getInfoAsync(localUri, { size: true });
@@ -152,8 +167,8 @@ export class DatabaseService {
         .from('alert-audio')
         .upload(filePath, blob, { contentType: 'audio/m4a', upsert: true });
       if (error) throw error;
-      const { data: pub } = supabase.storage.from('alert-audio').getPublicUrl(filePath);
-      const publicUrl = pub?.publicUrl ?? null;
+      const { data: pub } = supabase.storage.from('alert-audio').createSignedUrl(filePath, 60 * 60 * 24 * 30); // 30 days
+      const publicUrl = pub?.signedUrl ?? null;
       if (publicUrl) {
         await this.updateAlert(alertId, { audio_url: publicUrl } as any);
       }

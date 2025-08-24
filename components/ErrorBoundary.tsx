@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AlertTriangle, RefreshCw } from 'lucide-react-native';
 import { Colors } from '@/constants/colors';
+import * as Sentry from 'sentry-expo';
 
 interface Props {
   children: ReactNode;
@@ -26,6 +27,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
+    try {
+      Sentry.Native.captureException(error);
+    } catch {}
   }
 
   handleRetry = () => {
