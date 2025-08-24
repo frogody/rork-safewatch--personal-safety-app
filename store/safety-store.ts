@@ -8,6 +8,9 @@ import { DatabaseService } from '@/services/database';
 import type { DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
 import { useAuth } from './auth-store';
 
+// Keep a single watcher for foreground monitoring
+let monitoringLocationSubscription: { remove: () => void } | null = null;
+
 export interface SafetyAlert {
   id: string;
   title: string;
@@ -69,6 +72,10 @@ interface SafetyState {
   settings: SafetySettings;
   journey: JourneyMonitoring;
   lastAlertId: string | null;
+  share: {
+    journeyId: string | null;
+    shareToken: string | null;
+  };
 }
 
 const SAFETY_STORAGE_KEY = '@safewatch_safety';
@@ -149,6 +156,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       movementThreshold: 2 * 60 * 1000, // 2 minutes default
       preAlarmTriggered: false,
     },
+    share: { journeyId: null, shareToken: null },
   });
 
   // Real-time alerts query using database
@@ -242,6 +250,12 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         return;
       }
 
+      // Avoid duplicate watchers
+      if (monitoringLocationSubscription) {
+        try { monitoringLocationSubscription.remove(); } catch {}
+        monitoringLocationSubscription = null;
+      }
+
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
@@ -252,20 +266,36 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         currentLocation: location.coords,
       }));
 
-      console.log('Safety monitoring started');
+      // Continuous updates while monitoring
+      const sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.Balanced, timeInterval: 3000, distanceInterval: 10 },
+        (loc) => {
+          setSafetyState(prev => ({ ...prev, currentLocation: loc.coords }));
+        }
+      );
+      monitoringLocationSubscription = { remove: () => sub.remove() };
+
+      console.log('Safety monitoring started with continuous location updates');
     } catch (error) {
       console.error('Error starting monitoring:', error);
     }
   }, []);
 
   const stopMonitoring = useCallback(() => {
+    // Cleanup watcher if active
+    if (monitoringLocationSubscription) {
+      try { monitoringLocationSubscription.remove(); } catch {}
+      monitoringLocationSubscription = null;
+    }
     setSafetyState(prev => ({
       ...prev,
       isMonitoring: false,
       currentLocation: null,
     }));
+    // Also end sharing if any
+    try { endSharedJourney(); } catch {}
     console.log('Safety monitoring stopped');
-  }, []);
+  }, [endSharedJourney]);
 
   const checkAndEscalateAlert = useCallback(async (alertId: string) => {
     try {
@@ -465,6 +495,53 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     console.log('Journey stopped');
   }, []);
 
+  // Live share helpers
+  const generateShareToken = () => Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+
+  const beginSharedJourney = useCallback(async (destination: JourneyDestination) => {
+    if (!user) return;
+    try {
+      const token = generateShareToken();
+      const dbJourney = await DatabaseService.createJourney({
+        user_id: user.id,
+        destination_name: destination.name,
+        dest_lat: destination.latitude,
+        dest_lon: destination.longitude,
+        transport: destination.transport,
+        share_token: token,
+      } as any);
+      setSafetyState(prev => ({ ...prev, share: { journeyId: dbJourney.id, shareToken: token } }));
+      console.log('🔗 Journey share created:', token);
+    } catch (e) {
+      console.error('Failed to create shared journey', e);
+    }
+  }, [user]);
+
+  const endSharedJourney = useCallback(async () => {
+    const jId = safetyState.share.journeyId;
+    if (!jId) return;
+    try { await DatabaseService.endJourney(jId); } catch {}
+    setSafetyState(prev => ({ ...prev, share: { journeyId: null, shareToken: null } }));
+  }, [safetyState.share.journeyId]);
+
+  // Throttled live location publishing (every ~15s)
+  useEffect(() => {
+    let handle: ReturnType<typeof setInterval> | null = null;
+    if (safetyState.share.journeyId) {
+      handle = setInterval(() => {
+        const coords = safetyState.currentLocation;
+        if (!coords) return;
+        DatabaseService.addJourneyLocation(
+          safetyState.share.journeyId!,
+          coords.latitude,
+          coords.longitude,
+          coords.speed ?? null
+        ).catch(() => {});
+      }, 15000);
+    }
+    return () => { if (handle) clearInterval(handle); };
+  }, [safetyState.share.journeyId, safetyState.currentLocation]);
+
   const updateMovement = useCallback((hasMovement: boolean) => {
     setSafetyState(prev => {
       if (!prev.journey.isActive) return prev;
@@ -529,10 +606,12 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     updateMovement,
     triggerPreAlarm,
     simulateStationaryForDemo,
+    beginSharedJourney,
+    endSharedJourney,
     isLoading: alertsQuery.isLoading,
     isError: alertsQuery.isError,
     refetchAlerts: alertsQuery.refetch,
     // Database connection status
     isConnected: !alertsQuery.isError,
-  }), [safetyState, startMonitoring, stopMonitoring, triggerAlert, respondToAlert, updateSettings, startJourney, stopJourney, updateMovement, triggerPreAlarm, simulateStationaryForDemo, alertsQuery.isLoading, alertsQuery.isError, alertsQuery.refetch]);
+  }), [safetyState, startMonitoring, stopMonitoring, triggerAlert, respondToAlert, updateSettings, startJourney, stopJourney, updateMovement, triggerPreAlarm, simulateStationaryForDemo, beginSharedJourney, endSharedJourney, alertsQuery.isLoading, alertsQuery.isError, alertsQuery.refetch]);
 });

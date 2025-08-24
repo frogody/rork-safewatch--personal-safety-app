@@ -275,6 +275,16 @@ export default function SafetyScreen() {
       Vibration.cancel();
     }
   };
+  const handleSOSLongPress = async () => {
+    try {
+      if (Platform.OS !== 'web') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      }
+      await stopAllAlerts();
+      await triggerAlert();
+      try { router.push('/distress'); } catch {}
+    } catch (e) {}
+  };
 
   const handleDistressSignal = async () => {
     await stopAllAlerts();
@@ -541,6 +551,19 @@ export default function SafetyScreen() {
             <X color={Colors.text} size={16} />
             <Text style={styles.stopJourneyButtonText}>Stop Journey Monitoring</Text>
           </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.stopJourneyButton, { backgroundColor: Colors.yellow, borderColor: Colors.darkYellow }]}
+            onPress={() => {
+              updateMovement(true);
+              if (Platform.OS !== 'web') {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+              }
+              Alert.alert('Check-in recorded', 'Thanks for checking in. Monitoring continues.');
+            }}
+          >
+            <CheckCircle2 color={Colors.black} size={16} />
+            <Text style={[styles.stopJourneyButtonText, { color: Colors.black }]}>I'm OK (Check in)</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <View style={styles.journeyPromptCard}>
@@ -615,6 +638,8 @@ export default function SafetyScreen() {
         <TouchableOpacity
           style={styles.unsafeButton}
           onPress={handleUnsafeButton}
+          onLongPress={handleSOSLongPress}
+          delayLongPress={600}
         >
           <LinearGradient
             colors={[Colors.error, '#B71C1C']}

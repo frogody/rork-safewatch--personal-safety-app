@@ -11,6 +11,7 @@ import {
   TextInput,
   Modal,
   ActivityIndicator,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { 
@@ -32,6 +33,7 @@ import {
 import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
+import * as Clipboard from 'expo-clipboard';
 import { useSafetyStore } from '@/store/safety-store';
 import { useAuth } from '@/store/auth-store';
 import { Colors } from '@/constants/colors';
@@ -103,12 +105,28 @@ const FallbackCircle: React.FC<CircleProps> = ({ ...props }) => <View />;
 let MapView: React.ComponentType<MapViewProps>;
 let Marker: React.ComponentType<MarkerProps>;
 let Circle: React.ComponentType<CircleProps>;
+type PolylineCoord = { latitude: number; longitude: number };
+interface PolylineProps {
+  coordinates: PolylineCoord[];
+  strokeColor?: string;
+  strokeWidth?: number;
+}
+let Polyline: React.ComponentType<PolylineProps>;
+
+// Lightweight step model parsed from OSRM
+interface StepInfo {
+  instruction: string;
+  distance: number; // meters
+  duration: number; // seconds
+  endCoord: { latitude: number; longitude: number };
+}
 
 if (Platform.OS === 'web') {
   // Use fallback components on web to avoid bundling issues
   MapView = createFallbackMapView('Interactive map available on mobile devices');
   Marker = FallbackMarker;
   Circle = FallbackCircle;
+  Polyline = () => <View />;
 } else {
   // Use real react-native-maps on mobile - direct import for better reliability
   try {
@@ -117,6 +135,7 @@ if (Platform.OS === 'web') {
     MapView = RNMaps.default || RNMaps.MapView || RNMaps;
     Marker = RNMaps.Marker;
     Circle = RNMaps.Circle;
+    Polyline = RNMaps.Polyline;
     
     // Verify components are available
     if (!MapView || !Marker || !Circle) {
@@ -135,7 +154,7 @@ const { width, height } = Dimensions.get('window');
 
 export default function MapScreen() {
   const { user } = useAuth();
-  const { respondToAlert, triggerAlert, alerts } = useSafetyStore();
+  const { respondToAlert, triggerAlert, alerts, startJourney, stopJourney, updateMovement, journey, beginSharedJourney, endSharedJourney, share } = useSafetyStore() as any;
   const [currentLocation, setCurrentLocation] = useState<Location.LocationObject['coords'] | null>(null);
   const [selectedAlert, setSelectedAlert] = useState<typeof alerts[number] | null>(null);
   const [respondingToAlert, setRespondingToAlert] = useState<string | null>(null);
@@ -159,12 +178,23 @@ export default function MapScreen() {
   const [isMovingSession, setIsMovingSession] = useState<boolean>(false);
   const [preAlarmVisible, setPreAlarmVisible] = useState<boolean>(false);
   const [preAlarmCountdown, setPreAlarmCountdown] = useState<number>(60);
+  const [routeCoords, setRouteCoords] = useState<PolylineCoord[]>([]);
+  const [routeDistance, setRouteDistance] = useState<number | null>(null);
+  const [routeDuration, setRouteDuration] = useState<number | null>(null);
+  const [isRouting, setIsRouting] = useState<boolean>(false);
+  const [routingError, setRoutingError] = useState<string | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const lastMovementRef = useRef<number>(Date.now());
   const lastPositionRef = useRef<{ lat: number; lon: number } | null>(null);
   const inactivityIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mapRef = useRef<any>(null);
+  const [steps, setSteps] = useState<StepInfo[]>([]);
+  const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
+  const [stepsExpanded, setStepsExpanded] = useState<boolean>(false);
+  const [isRerouting, setIsRerouting] = useState<boolean>(false);
+  const lastRerouteAtRef = useRef<number>(0);
+  const shareLink = useMemo(() => share?.shareToken ? `myapp://journey?token=${share.shareToken}` : null, [share?.shareToken]);
 
   useEffect(() => {
     getCurrentLocation();
@@ -436,19 +466,71 @@ export default function MapScreen() {
     if (!last) {
       lastPositionRef.current = { lat, lon };
       lastMovementRef.current = Date.now();
+      try { updateMovement(true); } catch {}
       return;
     }
     const dist = haversine(last, { lat, lon });
     if (dist >= minimalMoveMeters) {
       lastMovementRef.current = Date.now();
       lastPositionRef.current = { lat, lon };
+      try { updateMovement(true); } catch {}
       if (preAlarmVisible) {
         setPreAlarmVisible(false);
         setPreAlarmCountdown(60);
         clearIntervals();
       }
     }
-  }, [haversine, minimalMoveMeters, preAlarmVisible, clearIntervals]);
+    // Advance step when close to its end
+    try {
+      const step = steps[currentStepIndex];
+      if (step) {
+        const dToEnd = haversine(
+          { lat, lon },
+          { lat: step.endCoord.latitude, lon: step.endCoord.longitude }
+        );
+        if (dToEnd < 25 && currentStepIndex < steps.length - 1) {
+          setCurrentStepIndex(idx => Math.min(idx + 1, steps.length - 1));
+        }
+      }
+    } catch {}
+
+    // Off-route detection with simple nearest-segment heuristic and debounce
+    try {
+      if (routeCoords.length > 1 && selectedPlace && isDestinationConfirmed) {
+        const maxOffRouteMeters = 50;
+        let minDist = Infinity;
+        for (let i = 0; i < routeCoords.length - 1; i++) {
+          const a = routeCoords[i];
+          const b = routeCoords[i + 1];
+          const mid = { lat: (a.latitude + b.latitude) / 2, lon: (a.longitude + b.longitude) / 2 };
+          const dA = haversine({ lat, lon }, { lat: a.latitude, lon: a.longitude });
+          const dB = haversine({ lat, lon }, { lat: b.latitude, lon: b.longitude });
+          const dM = haversine({ lat, lon }, mid);
+          const d = Math.min(dA, dB, dM);
+          if (d < minDist) minDist = d;
+          if (minDist < 10) break;
+        }
+        const now = Date.now();
+        if (minDist > maxOffRouteMeters && now - lastRerouteAtRef.current > 8000 && !isRerouting) {
+          setIsRerouting(true);
+          fetchRoute();
+        }
+      }
+    } catch {}
+    // Arrival detection
+    try {
+      if (isDestinationConfirmed && selectedPlace && isMovingSession) {
+        const toDest = haversine({ lat, lon }, { lat: selectedPlace.lat, lon: selectedPlace.lon });
+        if (toDest < 40) {
+          setIsMovingSession(false);
+          cleanupWatch();
+          clearIntervals();
+          try { stopJourney(); } catch {}
+          try { endSharedJourney(); } catch {}
+        }
+      }
+    } catch {}
+  }, [haversine, minimalMoveMeters, preAlarmVisible, clearIntervals, updateMovement, routeCoords, selectedPlace, isDestinationConfirmed, isRerouting, fetchRoute, isMovingSession, cleanupWatch, stopJourney, endSharedJourney]);
 
   const focusOnPlace = useCallback((lat: number, lon: number) => {
     try {
@@ -458,6 +540,97 @@ export default function MapScreen() {
     } catch {}
   }, []);
 
+  const osrmProfileFor = useCallback((t: Transport) => {
+    switch (t) {
+      case 'bike':
+        return 'cycling';
+      case 'car':
+      case 'public':
+        return 'driving';
+      case 'walk':
+      default:
+        return 'foot';
+    }
+  }, []);
+
+  const fetchRoute = useCallback(async () => {
+    if (!currentLocation || !selectedPlace || !isDestinationConfirmed) {
+      setRouteCoords([]);
+      setRouteDistance(null);
+      setRouteDuration(null);
+      setRoutingError(null);
+      setSteps([]);
+      setCurrentStepIndex(0);
+      return;
+    }
+    try {
+      setIsRouting(true);
+      if (!isRerouting) setIsRerouting(true);
+      setRoutingError(null);
+      const profile = osrmProfileFor(transport);
+      const url = `https://router.project-osrm.org/route/v1/${profile}/${currentLocation.longitude},${currentLocation.latitude};${selectedPlace.lon},${selectedPlace.lat}?overview=full&geometries=geojson&steps=true`;
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Route failed ${res.status}`);
+      const json = await res.json();
+      const route = json.routes?.[0];
+      if (!route) throw new Error('No route');
+      const coords: PolylineCoord[] = route.geometry.coordinates.map((c: [number, number]) => ({ latitude: c[1], longitude: c[0] }));
+      setRouteCoords(coords);
+      setRouteDistance(route.distance ?? null);
+      setRouteDuration(route.duration ?? null);
+
+      // Parse OSRM steps for lightweight guidance
+      try {
+        const leg = route.legs?.[0];
+        const parsed: StepInfo[] = (leg?.steps ?? []).map((s: any) => {
+          const geom = s.geometry?.coordinates ?? [];
+          const end = geom.length > 0 ? geom[geom.length - 1] : s.maneuver?.location ?? [selectedPlace.lon, selectedPlace.lat];
+          const name = s.name || 'road';
+          const type = s.maneuver?.type;
+          const modifier = s.maneuver?.modifier;
+          const instruction = (() => {
+            if (type === 'arrive') return 'Arrive at destination';
+            if (type === 'depart') return `Start on ${name}`;
+            if (type === 'roundabout') return `Enter roundabout, take exit towards ${name}`;
+            if (type === 'merge') return `Merge towards ${name}`;
+            if (type === 'fork') return `Keep ${modifier || 'straight'} towards ${name}`;
+            if (type === 'end of road') return `End of road, turn ${modifier || ''} onto ${name}`.trim();
+            if (type === 'turn') return `Turn ${modifier || ''} onto ${name}`.trim();
+            if (type === 'new name') return `Continue onto ${name}`;
+            if (type === 'continue') return `Continue ${modifier || ''} on ${name}`.trim();
+            return s.maneuver?.instruction || `Continue on ${name}`;
+          })();
+          return {
+            instruction,
+            distance: s.distance ?? 0,
+            duration: s.duration ?? 0,
+            endCoord: { latitude: end[1], longitude: end[0] },
+          } as StepInfo;
+        });
+        setSteps(parsed);
+        setCurrentStepIndex(0);
+      } catch {
+        setSteps([]);
+        setCurrentStepIndex(0);
+      }
+    } catch (e) {
+      setRoutingError('Failed to load route');
+      setRouteCoords([]);
+      setRouteDistance(null);
+      setRouteDuration(null);
+      setSteps([]);
+      setCurrentStepIndex(0);
+    } finally {
+      setIsRouting(false);
+      setIsRerouting(false);
+      lastRerouteAtRef.current = Date.now();
+    }
+  }, [currentLocation, selectedPlace, isDestinationConfirmed, transport, osrmProfileFor, isRerouting]);
+
+  useEffect(() => {
+    fetchRoute();
+  }, [fetchRoute]);
+
   const startMovingSession = useCallback(async () => {
     if (isMovingSession) return;
     setIsMovingSession(true);
@@ -465,6 +638,21 @@ export default function MapScreen() {
     if (currentLocation) {
       lastPositionRef.current = { lat: currentLocation.latitude, lon: currentLocation.longitude };
     }
+
+    // Sync with journey store if destination is confirmed
+    try {
+      if (selectedPlace && isDestinationConfirmed) {
+        const dest = {
+          id: selectedPlace.id,
+          name: selectedPlace.name,
+          address: selectedPlace.address ?? selectedPlace.name,
+          latitude: selectedPlace.lat,
+          longitude: selectedPlace.lon,
+          transport: transport,
+        } as const;
+        startJourney(dest as any);
+      }
+    } catch (e) {}
 
     if (Platform.OS === 'web') {
       if ('geolocation' in navigator) {
@@ -499,6 +687,7 @@ export default function MapScreen() {
       const now = Date.now();
       const elapsed = now - lastMovementRef.current;
       const threshold = transportThresholds[transport];
+      try { updateMovement(false); } catch {}
       if (!preAlarmVisible && elapsed >= threshold) {
         setPreAlarmVisible(true);
         setPreAlarmCountdown(60);
@@ -511,6 +700,7 @@ export default function MapScreen() {
               clearIntervals();
               setPreAlarmVisible(false);
               setIsMovingSession(false);
+              try { stopJourney(); } catch {}
               try { triggerAlert(); } catch (e) { console.log('triggerAlert error', e); }
               return 60;
             }
@@ -519,12 +709,13 @@ export default function MapScreen() {
         }, 1000);
       }
     }, 1000);
-  }, [isMovingSession, currentLocation, transport, transportThresholds, onPosition, clearIntervals, triggerAlert]);
+  }, [isMovingSession, currentLocation, transport, transportThresholds, onPosition, clearIntervals, triggerAlert, selectedPlace, isDestinationConfirmed, startJourney, stopJourney, updateMovement]);
 
   const stopMovingSession = useCallback(() => {
     setIsMovingSession(false);
     cleanupWatch();
     clearIntervals();
+    try { stopJourney(); } catch {}
   }, [cleanupWatch, clearIntervals]);
 
   const cancelPreAlarm = useCallback(() => {
@@ -532,6 +723,7 @@ export default function MapScreen() {
     setPreAlarmCountdown(60);
     lastMovementRef.current = Date.now();
     clearIntervals();
+    try { updateMovement(true); } catch {}
   }, [clearIntervals]);
 
   if (!user) {
@@ -638,7 +830,110 @@ export default function MapScreen() {
               />
             </React.Fragment>
           ))}
+          {routeCoords.length > 1 && (
+            <Polyline
+              coordinates={routeCoords}
+              strokeColor={Colors.yellow}
+              strokeWidth={5}
+            />
+          )}
         </MapView>
+        {user.userType !== 'responder' && (
+          <>
+            {isRerouting && (
+              <View style={styles.reroutingBanner}>
+                <Text style={styles.reroutingText}>Rerouting…</Text>
+              </View>
+            )}
+            {steps.length > 0 && (
+              <View style={styles.nextStepCard}>
+                <Text style={styles.nextStepText} numberOfLines={2}>
+                  {steps[currentStepIndex]?.instruction}
+                </Text>
+                <Text style={styles.nextStepSubText}>
+                  Next • {Math.round((steps[currentStepIndex]?.distance || 0))} m
+                </Text>
+              </View>
+            )}
+            <View style={styles.etaCard}>
+              <Text style={styles.etaText}>
+                {isRouting ? 'Calculating route…' : routingError ? routingError : (routeDistance != null && routeDuration != null ? `${(routeDistance/1000).toFixed(1)} km • ${Math.round(routeDuration/60)} min` : 'Enter a destination to see ETA')}
+              </Text>
+            </View>
+            <TouchableOpacity style={styles.recenterBtn} onPress={() => {
+              if (currentLocation && mapRef.current && typeof mapRef.current.animateToRegion === 'function') {
+                try {
+                  mapRef.current.animateToRegion({ latitude: currentLocation.latitude, longitude: currentLocation.longitude, latitudeDelta: 0.02, longitudeDelta: 0.02 }, 600);
+                } catch {}
+              }
+            }}>
+              <Navigation color={Colors.text} size={18} />
+            </TouchableOpacity>
+            {isDestinationConfirmed && selectedPlace && (
+              <TouchableOpacity style={[styles.recenterBtn, { bottom: 80 }]} onPress={async () => {
+                try {
+                  if (!share?.journeyId) {
+                    // Begin share if not started
+                    const dest = {
+                      id: selectedPlace.id,
+                      name: selectedPlace.name,
+                      address: selectedPlace.address ?? selectedPlace.name,
+                      latitude: selectedPlace.lat,
+                      longitude: selectedPlace.lon,
+                      transport,
+                    } as any;
+                    await beginSharedJourney(dest);
+                  }
+                  const link = shareLink;
+                  if (link) {
+                    await Clipboard.setStringAsync(link);
+                    Alert.alert('Share link copied', 'Send the link to your trusted contacts.');
+                  }
+                } catch {}
+              }}>
+                <Route color={Colors.text} size={18} />
+              </TouchableOpacity>
+            )}
+            {isDestinationConfirmed && selectedPlace && (
+              <TouchableOpacity style={[styles.recenterBtn, { bottom: 192, backgroundColor: Colors.yellow }]} onPress={async () => {
+                try {
+                  if (!share?.journeyId) {
+                    const dest = {
+                      id: selectedPlace.id,
+                      name: selectedPlace.name,
+                      address: selectedPlace.address ?? selectedPlace.name,
+                      latitude: selectedPlace.lat,
+                      longitude: selectedPlace.lon,
+                      transport,
+                    } as any;
+                    await beginSharedJourney(dest);
+                  }
+                  const link = shareLink;
+                  if (link) {
+                    const result = await Share.share({ message: `Track my trip: ${link}`, url: link });
+                    if (result.action === Share.sharedAction) {
+                      Alert.alert('Link shared', 'Your journey link was shared successfully.');
+                    } else if (result.action === Share.dismissedAction) {
+                      Alert.alert('Share canceled', 'You can share again anytime.');
+                    }
+                  }
+                } catch {}
+              }}>
+                <Navigation color={Colors.black} size={18} />
+              </TouchableOpacity>
+            )}
+            {share?.journeyId && (
+              <TouchableOpacity style={[styles.recenterBtn, { bottom: 136, backgroundColor: Colors.card }]} onPress={async () => {
+                try {
+                  await endSharedJourney();
+                  Alert.alert('Sharing ended', 'Your journey link is no longer active.');
+                } catch {}
+              }}>
+                <Square color={Colors.text} size={18} />
+              </TouchableOpacity>
+            )}
+          </>
+        )}
       </View>
 
       {user.userType === 'responder' ? (
@@ -759,6 +1054,28 @@ export default function MapScreen() {
             </TouchableOpacity>
           )}
 
+          {steps.length > 0 && (
+            <View style={styles.stepsCard}>
+              <TouchableOpacity onPress={() => setStepsExpanded(v => !v)} style={styles.stepsHeader}>
+                <Text style={styles.stepsTitle}>Directions</Text>
+                <Text style={styles.stepsToggle}>{stepsExpanded ? 'Hide' : 'Show'}</Text>
+              </TouchableOpacity>
+              {stepsExpanded && (
+                <View style={styles.stepsList}>
+                  {steps.map((s, i) => (
+                    <View key={i} style={[styles.stepRow, i === currentStepIndex && styles.stepRowActive]}>
+                      <Text style={styles.stepIndex}>{i + 1}.</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.stepInstruction} numberOfLines={2}>{s.instruction}</Text>
+                        <Text style={styles.stepMeta}>{Math.round(s.distance)} m • {Math.max(1, Math.round(s.duration/60))} min</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
+
           <Text style={styles.transportLabel}>Transport</Text>
           <View style={styles.transportRow}>
             <TouchableOpacity onPress={() => setTransport('walk')} style={[styles.transportChip, transport === 'walk' && styles.transportChipActive]} testID="transport-walk">
@@ -840,8 +1157,74 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.border,
   },
+  etaCard: {
+    position: 'absolute',
+    left: 24,
+    bottom: 24,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  etaText: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  nextStepCard: {
+    position: 'absolute',
+    left: 24,
+    top: 24,
+    right: 24,
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 2,
+  },
+  nextStepText: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  nextStepSubText: {
+    color: Colors.textMuted,
+    fontSize: 12,
+  },
+  recenterBtn: {
+    position: 'absolute',
+    right: 24,
+    bottom: 24,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
   map: {
     flex: 1,
+  },
+  reroutingBanner: {
+    position: 'absolute',
+    top: 24,
+    alignSelf: 'center',
+    backgroundColor: Colors.error,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.border,
+  },
+  reroutingText: {
+    color: Colors.text,
+    fontWeight: '700',
   },
   userMarker: {
     width: 32,
@@ -1007,6 +1390,60 @@ const styles = StyleSheet.create({
     color: Colors.black,
     fontWeight: '700',
     fontSize: 14,
+  },
+  stepsCard: {
+    backgroundColor: Colors.card,
+    borderWidth: 1,
+    borderColor: Colors.border,
+    borderRadius: 10,
+    marginBottom: 12,
+  },
+  stepsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.border,
+  },
+  stepsTitle: {
+    color: Colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  stepsToggle: {
+    color: Colors.textMuted,
+    fontSize: 14,
+  },
+  stepsList: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  stepRowActive: {
+    backgroundColor: Colors.yellow + '10',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+  },
+  stepIndex: {
+    color: Colors.textMuted,
+    width: 20,
+    textAlign: 'right',
+  },
+  stepInstruction: {
+    color: Colors.text,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  stepMeta: {
+    color: Colors.textMuted,
+    fontSize: 12,
   },
   helperText: {
     flex: 1,

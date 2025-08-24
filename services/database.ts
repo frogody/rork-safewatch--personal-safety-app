@@ -1,4 +1,4 @@
-import { supabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
+import { supabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse, DatabaseJourney, DatabaseJourneyLocation } from '@/constants/supabase';
 import * as FileSystem from 'expo-file-system';
 
 // Database service functions
@@ -267,6 +267,98 @@ export class DatabaseService {
     } catch (error) {
       console.error('❌ Error authenticating user:', error);
       throw error;
+    }
+  }
+
+  // Journey sharing
+  static async createJourney(payload: Omit<DatabaseJourney, 'id' | 'started_at' | 'ended_at' | 'is_active'>): Promise<DatabaseJourney> {
+    try {
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('journeys')
+        .insert({
+          user_id: payload.user_id,
+          destination_name: payload.destination_name,
+          dest_lat: payload.dest_lat,
+          dest_lon: payload.dest_lon,
+          transport: payload.transport,
+          started_at: now,
+          is_active: true,
+          share_token: payload.share_token,
+        })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseJourney;
+    } catch (e) {
+      console.error('❌ Error creating journey:', e);
+      throw e;
+    }
+  }
+
+  static async endJourney(journeyId: string): Promise<DatabaseJourney | null> {
+    try {
+      const { data, error } = await supabase
+        .from('journeys')
+        .update({ ended_at: new Date().toISOString(), is_active: false })
+        .eq('id', journeyId)
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseJourney;
+    } catch (e) {
+      console.error('❌ Error ending journey:', e);
+      throw e;
+    }
+  }
+
+  static async addJourneyLocation(journeyId: string, lat: number, lon: number, speed?: number | null): Promise<DatabaseJourneyLocation | null> {
+    try {
+      const { data, error } = await supabase
+        .from('journey_locations')
+        .insert({ journey_id: journeyId, lat, lon, speed: speed ?? null })
+        .select('*')
+        .single();
+      if (error) throw error;
+      return data as DatabaseJourneyLocation;
+    } catch (e) {
+      console.error('❌ Error adding journey location:', e);
+      return null;
+    }
+  }
+
+  static async fetchJourneyFeed(token: string): Promise<{ journey: DatabaseJourney | null; points: DatabaseJourneyLocation[] }>
+  {
+    try {
+      const { data, error } = await supabase.rpc('get_journey_feed', { token });
+      if (error) throw error;
+      const rows = (data as any[]) || [];
+      if (rows.length === 0) return { journey: null, points: [] };
+      const head = rows[0];
+      const journey: DatabaseJourney = {
+        id: head.journey_id,
+        user_id: '', // not returned by RPC to anon; omit
+        destination_name: head.destination_name,
+        dest_lat: head.dest_lat,
+        dest_lon: head.dest_lon,
+        transport: head.transport,
+        started_at: head.started_at,
+        ended_at: head.ended_at,
+        is_active: head.is_active,
+        share_token: token,
+      } as any;
+      const points: DatabaseJourneyLocation[] = rows.filter(r => r.point_time).map(r => ({
+        id: 0,
+        journey_id: head.journey_id,
+        ts: r.point_time,
+        lat: r.lat,
+        lon: r.lon,
+        speed: r.speed,
+      }));
+      return { journey, points };
+    } catch (e) {
+      console.error('❌ Error fetching journey feed:', e);
+      return { journey: null, points: [] };
     }
   }
 }

@@ -55,3 +55,25 @@ export interface DatabaseAlertResponse {
   action: 'acknowledge' | 'respond';
   created_at: string;
 }
+
+export interface DatabaseJourney {
+  id: string;
+  user_id: string;
+  destination_name: string;
+  dest_lat: number;
+  dest_lon: number;
+  transport: 'walk' | 'bike' | 'car' | 'public';
+  started_at: string;
+  ended_at: string | null;
+  is_active: boolean;
+  share_token: string;
+}
+
+export interface DatabaseJourneyLocation {
+  id: number;
+  journey_id: string;
+  ts: string;
+  lat: number;
+  lon: number;
+  speed: number | null;
+}
