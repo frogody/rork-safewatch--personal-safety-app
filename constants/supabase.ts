@@ -2,18 +2,19 @@ import { createClient } from '@supabase/supabase-js';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const supabaseUrl = (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined)
-  || (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined)
-  || (Constants?.expoConfig?.extra as any)?.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+const extra = (Constants?.expoConfig?.extra ?? {}) as any;
+const supabaseUrl = (extra?.EXPO_PUBLIC_SUPABASE_URL as string | undefined)
+  ?? (process.env.EXPO_PUBLIC_SUPABASE_URL as string | undefined);
+const supabaseAnonKey = (extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined)
+  ?? (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined);
 
 if (!supabaseUrl || !supabaseAnonKey) {
-  if (__DEV__) {
-    console.warn('Supabase URL/key are not set. Please set EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY.');
-  }
+  const msg = 'Supabase URL/key are not set. Ensure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY are defined in app.config.ts extra or .env (EXPO_PUBLIC_*). Restart the dev server with -c after changes.';
+  // Fail fast so we get a clear error close to the source
+  throw new Error(msg);
 }
 
-export const supabase = createClient(supabaseUrl ?? '', supabaseAnonKey ?? '', {
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: AsyncStorage as any,
     autoRefreshToken: true,
