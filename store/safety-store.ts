@@ -281,6 +281,13 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     }
   }, []);
 
+  const endSharedJourney = useCallback(async () => {
+    const jId = safetyState.share.journeyId;
+    if (!jId) return;
+    try { await DatabaseService.endJourney(jId); } catch {}
+    setSafetyState(prev => ({ ...prev, share: { journeyId: null, shareToken: null } }));
+  }, [safetyState.share.journeyId]);
+
   const stopMonitoring = useCallback(() => {
     // Cleanup watcher if active
     if (monitoringLocationSubscription) {
@@ -517,12 +524,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     }
   }, [user]);
 
-  const endSharedJourney = useCallback(async () => {
-    const jId = safetyState.share.journeyId;
-    if (!jId) return;
-    try { await DatabaseService.endJourney(jId); } catch {}
-    setSafetyState(prev => ({ ...prev, share: { journeyId: null, shareToken: null } }));
-  }, [safetyState.share.journeyId]);
+  // endSharedJourney moved above to be available for stopMonitoring dependency
 
   // Throttled live location publishing (every ~15s)
   useEffect(() => {
@@ -574,26 +576,6 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     console.log('Pre-alarm triggered for journey monitoring');
   }, []);
 
-  const simulateStationaryForDemo = useCallback(() => {
-    setSafetyState(prev => {
-      if (!prev.journey.isActive) return prev;
-
-      // Set last movement to be older than the threshold to trigger stationary state
-      const thresholdTime = new Date(Date.now() - prev.journey.movementThreshold - 30000); // 30 seconds past threshold
-      
-      return {
-        ...prev,
-        journey: {
-          ...prev.journey,
-          lastMovement: thresholdTime,
-          isStationary: true,
-          stationaryDuration: prev.journey.movementThreshold + 30000,
-        },
-      };
-    });
-    console.log('Demo: Simulated stationary state');
-  }, []);
-
   return useMemo(() => ({
     ...safetyState,
     startMonitoring,
@@ -605,7 +587,6 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     stopJourney,
     updateMovement,
     triggerPreAlarm,
-    simulateStationaryForDemo,
     beginSharedJourney,
     endSharedJourney,
     isLoading: alertsQuery.isLoading,
@@ -613,5 +594,5 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     refetchAlerts: alertsQuery.refetch,
     // Database connection status
     isConnected: !alertsQuery.isError,
-  }), [safetyState, startMonitoring, stopMonitoring, triggerAlert, respondToAlert, updateSettings, startJourney, stopJourney, updateMovement, triggerPreAlarm, simulateStationaryForDemo, beginSharedJourney, endSharedJourney, alertsQuery.isLoading, alertsQuery.isError, alertsQuery.refetch]);
+  }), [safetyState, startMonitoring, stopMonitoring, triggerAlert, respondToAlert, updateSettings, startJourney, stopJourney, updateMovement, triggerPreAlarm, beginSharedJourney, endSharedJourney, alertsQuery.isLoading, alertsQuery.isError, alertsQuery.refetch]);
 });

@@ -404,29 +404,7 @@ export default function SafetyScreen() {
         <Text style={styles.headerSubtitle}>Your personal safety network</Text>
       </View>
 
-      <View style={styles.statusCard}>
-        <View style={styles.statusHeader}>
-          <Shield 
-            color={isMonitoring ? Colors.yellow : Colors.textMuted} 
-            size={24} 
-          />
-          <Text style={[
-            styles.statusText,
-            { color: isMonitoring ? Colors.yellow : Colors.textMuted }
-          ]}>
-            {isMonitoring ? "Monitoring Active" : "Monitoring Inactive"}
-          </Text>
-        </View>
-        
-        {currentLocation && (
-          <View style={styles.locationInfo}>
-            <MapPin color={Colors.textMuted} size={16} />
-            <Text style={styles.locationText}>
-              Location: {currentLocation.latitude.toFixed(4)}, {currentLocation.longitude.toFixed(4)}
-            </Text>
-          </View>
-        )}
-      </View>
+      {/* Status card removed per request */}
 
       {journey.isActive && journey.destination ? (
         <View style={styles.journeyCard}>
