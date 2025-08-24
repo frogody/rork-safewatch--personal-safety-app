@@ -6,11 +6,11 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "@/store/auth-store";
 import { SafetyProvider } from "@/store/safety-store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import * as Sentry from 'sentry-expo';
+import * as Sentry from '@sentry/react-native';
 
 Sentry.init({
   dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  enableInExpoDevelopment: true,
+  enableNative: true,
   debug: __DEV__,
   tracesSampleRate: __DEV__ ? 0.1 : 0.2,
 });

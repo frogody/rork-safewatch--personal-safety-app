@@ -506,8 +506,8 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
 
   // Live share helpers
   const generateShareToken = () => {
-    // Crypto-strong token using expo-random
-    const { getRandomBytes } = require('expo-random');
+    // Crypto-strong token using expo-crypto
+    const { getRandomBytes } = require('expo-crypto');
     const bytes: Uint8Array = getRandomBytes(16);
     let hex = '';
     for (let i = 0; i < bytes.length; i++) {

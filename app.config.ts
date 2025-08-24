@@ -62,6 +62,13 @@ const config: ExpoConfig = {
   },
   plugins: [
     [
+      '@sentry/react-native/expo',
+      {
+        // Config via env at build time
+      },
+    ],
+    'expo-web-browser',
+    [
       'expo-router',
       {
         origin: 'https://rork.com/',
