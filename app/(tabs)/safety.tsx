@@ -30,13 +30,9 @@ export default function SafetyScreen() {
     isMonitoring,
     currentLocation,
     journey,
-    startMonitoring,
-    stopMonitoring,
     triggerAlert,
-    startJourney,
     stopJourney,
     updateMovement,
-    simulateStationaryForDemo,
   } = useSafetyStore();
   
   // Prevent responders from accessing this screen
@@ -275,7 +271,7 @@ export default function SafetyScreen() {
       if (perm.status === 'granted') {
         await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
         const recording = new Audio.Recording();
-        await recording.prepareToRecordAsync(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
+        await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
         await recording.startAsync();
         setTimeout(async () => {
           try {
@@ -284,8 +280,9 @@ export default function SafetyScreen() {
             if (uri) {
               try {
                 const { useSafetyStore } = await import('@/store/safety-store');
-                const store = useSafetyStore.getState();
-                const alertId = store.lastAlertId || '';
+                const store: any = (useSafetyStore as any);
+                const storeState = store.getState ? store.getState() : null;
+                const alertId = storeState?.lastAlertId || '';
                 if (alertId) {
                   const { DatabaseService } = await import('@/services/database');
                   await DatabaseService.uploadAlertAudio(alertId, uri);
@@ -541,59 +538,7 @@ export default function SafetyScreen() {
             <Text style={[styles.stopJourneyButtonText, { color: Colors.black }]}>I'm OK (Check in)</Text>
           </TouchableOpacity>
         </View>
-      ) : (
-        <View style={styles.journeyPromptCard}>
-          <View style={styles.journeyPromptHeader}>
-            <Navigation color={Colors.textMuted} size={20} />
-            <Text style={styles.journeyPromptTitle}>Journey Monitoring</Text>
-          </View>
-          <Text style={styles.journeyPromptSubtitle}>
-            Set a destination in the Map tab to enable automatic monitoring for unexpected stops during your journey.
-          </Text>
-          <TouchableOpacity
-            style={styles.demoJourneyButton}
-            onPress={() => {
-              // Demo journey to show functionality
-              const demoDestination = {
-                id: 'demo-1',
-                name: 'Downtown Coffee Shop',
-                address: '123 Main St, San Francisco, CA',
-                latitude: 37.7849,
-                longitude: -122.4094,
-                transport: 'walk' as const,
-              };
-              startJourney(demoDestination);
-              
-              // Simulate being stationary after 3 seconds for demo
-              setTimeout(() => {
-                simulateStationaryForDemo();
-              }, 3000);
-              
-              // Add button to simulate movement for demo
-              Alert.alert(
-                'Demo Journey Started',
-                'Journey monitoring is now active. The app will simulate being stationary after 3 seconds to show the monitoring features.',
-                [
-                  { text: 'OK' },
-                  {
-                    text: 'Simulate Movement',
-                    onPress: () => {
-                      updateMovement(true);
-                      setTimeout(() => updateMovement(false), 2000);
-                    }
-                  }
-                ]
-              );
-              if (Platform.OS !== 'web') {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              }
-            }}
-          >
-            <Play color={Colors.black} size={16} />
-            <Text style={styles.demoJourneyButtonText}>Try Demo Journey</Text>
-          </TouchableOpacity>
-        </View>
-      )}
+      ) : null}
 
       <View style={styles.mainActions}>
         <TouchableOpacity
@@ -1001,48 +946,7 @@ const styles = StyleSheet.create({
     flex: 1,
     lineHeight: 16,
   },
-  journeyPromptCard: {
-    backgroundColor: Colors.card,
-    margin: 20,
-    marginTop: 12,
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-    alignItems: 'center',
-  },
-  journeyPromptHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  journeyPromptTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.text,
-  },
-  journeyPromptSubtitle: {
-    fontSize: 14,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 16,
-  },
-  demoJourneyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: Colors.yellow,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
-  demoJourneyButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.black,
-  },
+  // removed demo styles
   stopJourneyButton: {
     flexDirection: 'row',
     alignItems: 'center',
