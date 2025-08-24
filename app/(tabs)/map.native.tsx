@@ -316,6 +316,25 @@ export default function MapScreen() {
     }
   }, [haversine, minimalMoveMeters, preAlarmVisible, clearIntervals, updateMovement]);
 
+  // Keep current step highlighted as user progresses
+  useEffect(() => {
+    if (!currentLocation || steps.length === 0) return;
+    try {
+      let bestIdx = currentStepIndex;
+      let bestDist = Infinity;
+      for (let i = currentStepIndex; i < steps.length; i++) {
+        const step = steps[i];
+        const d = haversine(
+          { lat: currentLocation.latitude, lon: currentLocation.longitude },
+          { lat: step.endCoord.latitude, lon: step.endCoord.longitude }
+        );
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+        if (bestDist < 30) break;
+      }
+      if (bestIdx !== currentStepIndex) setCurrentStepIndex(bestIdx);
+    } catch {}
+  }, [currentLocation, steps, currentStepIndex, haversine]);
+
   const focusOnPlace = useCallback((lat: number, lon: number) => {
     try {
       if (mapRef.current && typeof mapRef.current.animateToRegion === 'function') {
@@ -353,6 +372,26 @@ export default function MapScreen() {
       setRouteCoords(coords);
       setRouteDistance(route.distance ?? null);
       setRouteDuration(route.duration ?? null);
+
+      // Parse turn-by-turn steps
+      const legs = route.legs || [];
+      const parsed: StepInfo[] = [];
+      for (const leg of legs) {
+        const legSteps = leg.steps || [];
+        for (const st of legSteps) {
+          const maneuver = st.maneuver || {};
+          const type = maneuver.type || '';
+          const modifier = maneuver.modifier || '';
+          const name = (st.name || '').trim();
+          const base = [type, modifier].filter(Boolean).join(' ');
+          const instruction = `${base || 'Continue'}${name ? ` onto ${name}` : ''}`.trim();
+          const end = (st.geometry?.coordinates?.slice(-1)?.[0]) || null;
+          const endCoord = end ? { latitude: end[1], longitude: end[0] } : coords[coords.length - 1];
+          parsed.push({ instruction, distance: st.distance || 0, duration: st.duration || 0, endCoord });
+        }
+      }
+      setSteps(parsed);
+      setCurrentStepIndex(0);
     } catch (e) {
       setRoutingError('Failed to load route');
       setRouteCoords([]); setRouteDistance(null); setRouteDuration(null);
@@ -487,7 +526,183 @@ export default function MapScreen() {
         />
       </View>
 
-      {/* The rest of the bottom panels are unchanged from the previous file; omitted here for brevity */}
+      {/* Journey Planner (Seekers) */}
+      {user.userType === 'safety-seeker' && (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Journey planner</Text>
+            <View style={styles.searchRow}>
+              <MapPin color={Colors.textMuted} size={16} />
+              <TextInput
+                value={destination}
+                onChangeText={setDestination}
+                placeholder="Search destination"
+                placeholderTextColor={Colors.textMuted}
+                style={styles.searchInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="search"
+              />
+            </View>
+            {!!searchError && <Text style={styles.errorSmall}>{searchError}</Text>}
+            {isSearching && <Text style={styles.searchHint}>Searching…</Text>}
+            {suggestions.length > 0 && (
+              <View style={styles.suggestBox}>
+                <ScrollView style={{ maxHeight: 180 }}>
+                  {suggestions.map(s => (
+                    <TouchableOpacity key={s.id} style={styles.suggestItem} onPress={() => onSelectSuggestion(s)}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <MapPin color={Colors.yellow} size={16} />
+                        <Text style={styles.suggestText} numberOfLines={2}>{s.name}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+
+            <View style={styles.transportRow}>
+              <TouchableOpacity style={[styles.transportBtn, transport === 'walk' && styles.transportBtnActive]} onPress={() => setTransport('walk')}>
+                <Footprints color={transport === 'walk' ? Colors.black : Colors.text} size={16} />
+                <Text style={[styles.transportText, transport === 'walk' && styles.transportTextActive]}>Walk</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.transportBtn, transport === 'bike' && styles.transportBtnActive]} onPress={() => setTransport('bike')}>
+                <Bike color={transport === 'bike' ? Colors.black : Colors.text} size={16} />
+                <Text style={[styles.transportText, transport === 'bike' && styles.transportTextActive]}>Bike</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.transportBtn, transport === 'car' && styles.transportBtnActive]} onPress={() => setTransport('car')}>
+                <Car color={transport === 'car' ? Colors.black : Colors.text} size={16} />
+                <Text style={[styles.transportText, transport === 'car' && styles.transportTextActive]}>Car</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.transportBtn, transport === 'public' && styles.transportBtnActive]} onPress={() => setTransport('public')}>
+                <TramFront color={transport === 'public' ? Colors.black : Colors.text} size={16} />
+                <Text style={[styles.transportText, transport === 'public' && styles.transportTextActive]}>Transit</Text>
+              </TouchableOpacity>
+            </View>
+
+            {!isDestinationConfirmed ? (
+              <TouchableOpacity
+                style={[styles.primaryBtn, !selectedPlace && styles.btnDisabled]}
+                disabled={!selectedPlace}
+                onPress={onConfirmDestination}
+              >
+                <Navigation color={selectedPlace ? Colors.black : Colors.textMuted} size={16} />
+                <Text style={[styles.primaryBtnText, !selectedPlace && styles.btnTextDisabled]}>Confirm destination</Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.routeSummary}>
+                <View style={styles.routeMeta}>
+                  <Route color={Colors.textMuted} size={16} />
+                  <Text style={styles.routeMetaText}>
+                    {routingError ? 'Route unavailable' : isRouting ? 'Loading route…' : (
+                      routeDistance && routeDuration ? `${(routeDistance/1000).toFixed(1)} km • ${Math.round(routeDuration/60)} min` : '—'
+                    )}
+                  </Text>
+                </View>
+                <View style={styles.rowGap}>
+                  <TouchableOpacity style={[styles.secondaryBtn, styles.flex1]} onPress={() => setStepsExpanded(v => !v)}>
+                    <Clock color={Colors.text} size={16} />
+                    <Text style={styles.secondaryBtnText}>{stepsExpanded ? 'Hide steps' : 'Show steps'}</Text>
+                  </TouchableOpacity>
+                  {!isMovingSession ? (
+                    <TouchableOpacity style={[styles.primaryBtn, styles.flex1, (!selectedPlace || !isDestinationConfirmed) && styles.btnDisabled]}
+                      disabled={!selectedPlace || !isDestinationConfirmed}
+                      onPress={startMovingSession}
+                    >
+                      <Play color={!selectedPlace || !isDestinationConfirmed ? Colors.textMuted : Colors.black} size={16} />
+                      <Text style={[styles.primaryBtnText, (!selectedPlace || !isDestinationConfirmed) && styles.btnTextDisabled]}>Start monitoring</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={[styles.stopBtn, styles.flex1]} onPress={stopMovingSession}>
+                      <Square color={Colors.text} size={16} />
+                      <Text style={styles.stopBtnText}>Stop</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {stepsExpanded && steps.length > 0 && (
+              <View style={styles.stepsBox}>
+                <ScrollView style={{ maxHeight: 180 }}>
+                  {steps.map((s, idx) => (
+                    <View key={idx} style={[styles.stepRow, idx === currentStepIndex && styles.stepRowActive]}>
+                      <Text style={styles.stepIdx}>{idx + 1}.</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.stepInstruction} numberOfLines={2}>{s.instruction}</Text>
+                        <Text style={styles.stepMeta}>{(s.distance/1000).toFixed(2)} km • {Math.round(s.duration/60)} min</Text>
+                      </View>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+
+          {/* Share Controls */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Live sharing</Text>
+            {shareLink ? (
+              <View style={{ gap: 8 }}>
+                <View style={styles.rowGap}>
+                  <TouchableOpacity style={[styles.secondaryBtn, styles.flex1]} onPress={async () => { try { await Clipboard.setStringAsync(shareLink); Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); } catch {} }}>
+                    <User color={Colors.text} size={16} />
+                    <Text style={styles.secondaryBtnText}>Copy link</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.secondaryBtn, styles.flex1]} onPress={async () => { try { await Share.share({ message: shareLink }); } catch {} }}>
+                    <Navigation color={Colors.text} size={16} />
+                    <Text style={styles.secondaryBtnText}>Share…</Text>
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity style={styles.dangerOutlineBtn} onPress={() => endSharedJourney()}>
+                  <Text style={styles.dangerOutlineText}>End sharing</Text>
+                </TouchableOpacity>
+                <Text style={styles.shareHint} numberOfLines={2}>{shareLink}</Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[styles.primaryBtn, (!selectedPlace || !isDestinationConfirmed) && styles.btnDisabled]}
+                disabled={!selectedPlace || !isDestinationConfirmed}
+                onPress={() => {
+                  if (!selectedPlace) return;
+                  beginSharedJourney({
+                    id: selectedPlace.id,
+                    name: selectedPlace.name,
+                    address: selectedPlace.address ?? selectedPlace.name,
+                    latitude: selectedPlace.lat,
+                    longitude: selectedPlace.lon,
+                    transport,
+                  } as any);
+                }}
+              >
+                <User color={!selectedPlace || !isDestinationConfirmed ? Colors.textMuted : Colors.black} size={16} />
+                <Text style={[styles.primaryBtnText, (!selectedPlace || !isDestinationConfirmed) && styles.btnTextDisabled]}>Create share link</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </>
+      )}
+
+      {/* Pre-alarm modal */}
+      <Modal visible={preAlarmVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <AlertTriangle color={Colors.error} size={28} />
+            <Text style={styles.modalTitle}>Are you safe?</Text>
+            <Text style={styles.modalSubtitle}>No movement detected. Sending alert in {preAlarmCountdown}s.</Text>
+            <View style={styles.rowGap}>
+              <TouchableOpacity style={[styles.secondaryBtn, styles.flex1]} onPress={cancelPreAlarm}>
+                <CheckCircle color={Colors.text} size={16} />
+                <Text style={styles.secondaryBtnText}>I’m OK</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.stopBtn, styles.flex1]} onPress={() => { try { triggerAlert(); } catch {}; setPreAlarmVisible(false); setIsMovingSession(false); clearIntervals(); }}>
+                <AlertTriangle color={Colors.text} size={16} />
+                <Text style={styles.stopBtnText}>Send help now</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -505,6 +720,48 @@ const styles = StyleSheet.create({
   errorContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   errorText: { fontSize: 24, fontWeight: 'bold', color: Colors.error, marginTop: 16, marginBottom: 8 },
   errorSubtext: { fontSize: 16, color: Colors.textMuted, textAlign: 'center' },
+  // Planner styles
+  card: { marginHorizontal: 16, marginBottom: 12, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 12, gap: 10 },
+  cardTitle: { color: Colors.text, fontSize: 16, fontWeight: '700' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 8 },
+  searchInput: { flex: 1, color: Colors.text },
+  searchHint: { color: Colors.textMuted, fontSize: 12, marginTop: 4 },
+  suggestBox: { marginTop: 8, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, borderRadius: 8 },
+  suggestItem: { paddingHorizontal: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  suggestText: { color: Colors.text, fontSize: 14, flex: 1 },
+  transportRow: { flexDirection: 'row', gap: 8 },
+  transportBtn: { flex: 1, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, borderRadius: 8, paddingVertical: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  transportBtnActive: { backgroundColor: Colors.yellow, borderColor: Colors.yellow },
+  transportText: { color: Colors.text, fontWeight: '600' },
+  transportTextActive: { color: Colors.black },
+  primaryBtn: { backgroundColor: Colors.yellow, paddingVertical: 12, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  primaryBtnText: { color: Colors.black, fontWeight: '700' },
+  secondaryBtn: { backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, paddingVertical: 10, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 },
+  secondaryBtnText: { color: Colors.text, fontWeight: '700' },
+  stopBtn: { backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, paddingVertical: 12, borderRadius: 8, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
+  stopBtnText: { color: Colors.text, fontWeight: '700' },
+  dangerOutlineBtn: { borderWidth: 1, borderColor: Colors.error, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  dangerOutlineText: { color: Colors.error, fontWeight: '700' },
+  btnDisabled: { opacity: 0.6 },
+  btnTextDisabled: { color: Colors.textMuted },
+  routeSummary: { gap: 10 },
+  routeMeta: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  routeMetaText: { color: Colors.text },
+  stepsBox: { marginTop: 8, backgroundColor: Colors.background, borderWidth: 1, borderColor: Colors.border, borderRadius: 8 },
+  stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, paddingHorizontal: 10, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: Colors.border },
+  stepRowActive: { backgroundColor: Colors.card },
+  stepIdx: { color: Colors.textMuted, width: 18, textAlign: 'right' },
+  stepInstruction: { color: Colors.text, fontWeight: '600' },
+  stepMeta: { color: Colors.textMuted, fontSize: 12 },
+  rowGap: { flexDirection: 'row', gap: 10 },
+  flex1: { flex: 1 },
+  errorSmall: { color: Colors.error, fontSize: 12 },
+  shareHint: { color: Colors.textMuted, fontSize: 12 },
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalCard: { width: '100%', backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border, borderRadius: 12, padding: 16, gap: 10, alignItems: 'center' },
+  modalTitle: { color: Colors.text, fontSize: 18, fontWeight: '800' },
+  modalSubtitle: { color: Colors.textMuted, fontSize: 14, textAlign: 'center' },
 });
 
 
