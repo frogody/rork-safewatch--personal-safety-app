@@ -9,6 +9,11 @@ const supabaseAnonKey = (extra?.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefi
   ?? (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY as string | undefined);
 
 if (!supabaseUrl || !supabaseAnonKey) {
+  if (__DEV__) {
+    // Non-sensitive debug to help diagnose env loading issues
+    // eslint-disable-next-line no-console
+    console.log('Supabase config presence', { hasUrl: !!supabaseUrl, hasKey: !!supabaseAnonKey, extraKeys: Object.keys(extra || {}) });
+  }
   const msg = 'Supabase URL/key are not set. Ensure EXPO_PUBLIC_SUPABASE_URL and EXPO_PUBLIC_SUPABASE_ANON_KEY are defined in app.config.ts extra or .env (EXPO_PUBLIC_*). Restart the dev server with -c after changes.';
   // Fail fast so we get a clear error close to the source
   throw new Error(msg);
