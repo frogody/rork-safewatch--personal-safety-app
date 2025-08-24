@@ -1,5 +1,6 @@
 import { supabase, DatabaseUser, DatabaseAlert, DatabaseAlertResponse, DatabaseJourney, DatabaseJourneyLocation } from '@/constants/supabase';
 import * as FileSystem from 'expo-file-system';
+import { logger } from '@/constants/logger';
 
 // Database service functions
 export class DatabaseService {
@@ -25,7 +26,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseUser;
     } catch (error) {
-      console.error('❌ Error creating user:', error);
+      logger.error('❌ Error creating user:', error);
       throw error;
     }
   }
@@ -40,7 +41,7 @@ export class DatabaseService {
       if (error) throw error;
       return (data as DatabaseUser) ?? null;
     } catch (error) {
-      console.error('❌ Error getting user by email:', error);
+      logger.error('❌ Error getting user by email:', error);
       throw error;
     }
   }
@@ -55,7 +56,7 @@ export class DatabaseService {
       if (error) throw error;
       return (data as DatabaseUser) ?? null;
     } catch (error) {
-      console.error('❌ Error getting user by ID:', error);
+      logger.error('❌ Error getting user by ID:', error);
       throw error;
     }
   }
@@ -75,7 +76,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseUser;
     } catch (error) {
-      console.error('❌ Error updating user:', error);
+      logger.error('❌ Error updating user:', error);
       throw error;
     }
   }
@@ -102,22 +103,26 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseAlert;
     } catch (error) {
-      console.error('❌ Error creating alert:', error);
+      logger.error('❌ Error creating alert:', error);
       throw error;
     }
   }
 
-  static async getAlerts(): Promise<DatabaseAlert[]> {
+  static async getAlerts(opts?: { sinceHours?: number; limit?: number }): Promise<DatabaseAlert[]> {
     try {
+      const sinceHours = opts?.sinceHours ?? 24;
+      const limit = opts?.limit ?? 100;
       const { data, error } = await supabase
         .from('alerts')
         .select('*')
         .eq('status', 'active')
+        .gte('timestamp', new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString())
         .order('timestamp', { ascending: false });
       if (error) throw error;
-      return (data as DatabaseAlert[]) ?? [];
+      const rows = (data as DatabaseAlert[]) ?? [];
+      return rows.slice(0, limit);
     } catch (error) {
-      console.error('❌ Error getting alerts:', error);
+      logger.error('❌ Error getting alerts:', error);
       throw error;
     }
   }
@@ -136,7 +141,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseAlert;
     } catch (error) {
-      console.error('❌ Error updating alert:', error);
+      logger.error('❌ Error updating alert:', error);
       throw error;
     }
   }
@@ -151,7 +156,7 @@ export class DatabaseService {
       if (error) throw error;
       return (data as DatabaseAlert) ?? null;
     } catch (error) {
-      console.error('❌ Error getting alert by ID:', error);
+      logger.error('❌ Error getting alert by ID:', error);
       throw error;
     }
   }
@@ -174,7 +179,7 @@ export class DatabaseService {
       }
       return publicUrl;
     } catch (e) {
-      console.error('❌ Upload audio failed', e);
+      logger.error('❌ Upload audio failed', e);
       return null;
     }
   }
@@ -193,7 +198,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseAlertResponse;
     } catch (error) {
-      console.error('❌ Error creating alert response:', error);
+      logger.error('❌ Error creating alert response:', error);
       throw error;
     }
   }
@@ -208,7 +213,7 @@ export class DatabaseService {
       if (error) throw error;
       return (data as DatabaseAlertResponse[]) ?? [];
     } catch (error) {
-      console.error('❌ Error getting alert responses:', error);
+      logger.error('❌ Error getting alert responses:', error);
       throw error;
     }
   }
@@ -227,7 +232,7 @@ export class DatabaseService {
         const newRecord = payload.new as DatabaseAlert;
         if (!newRecord) return;
         this.alertSubscribers.forEach((cb) => {
-          try { cb(newRecord); } catch (e) { console.error(e); }
+          try { cb(newRecord); } catch (e) { logger.error(e); }
         });
       })
       .subscribe();
@@ -241,7 +246,7 @@ export class DatabaseService {
         const newRecord = payload.new as DatabaseAlertResponse;
         if (!newRecord) return;
         this.responseSubscribers.forEach((cb) => {
-          try { cb(newRecord); } catch (e) { console.error(e); }
+          try { cb(newRecord); } catch (e) { logger.error(e); }
         });
       })
       .subscribe();
@@ -258,6 +263,31 @@ export class DatabaseService {
         this.alertsChannel = null;
       }
     };
+  }
+
+  // Maintenance: cleanup old alerts for current user (e.g., resolve anything older than N hours)
+  static async cleanupOldAlerts({ olderThanHours = 72 }: { olderThanHours?: number } = {}): Promise<{ resolved: number }>{
+    try {
+      const { data: authData, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw authErr;
+      const userId = authData.user?.id;
+      if (!userId) return { resolved: 0 };
+      const cutoff = new Date(Date.now() - olderThanHours * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from('alerts')
+        .update({ status: 'resolved', updated_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .eq('status', 'active')
+        .lt('timestamp', cutoff)
+        .select('id');
+      if (error) throw error;
+      const resolved = Array.isArray(data) ? data.length : 0;
+      if (resolved > 0) logger.info(`Cleanup resolved ${resolved} old alerts`);
+      return { resolved };
+    } catch (e) {
+      logger.error('Cleanup old alerts failed', e);
+      return { resolved: 0 };
+    }
   }
 
   static subscribeToAlertResponses(callback: (response: DatabaseAlertResponse) => void): () => void {
@@ -280,7 +310,7 @@ export class DatabaseService {
       const user = await this.getUserByEmail(email);
       return user;
     } catch (error) {
-      console.error('❌ Error authenticating user:', error);
+      logger.error('❌ Error authenticating user:', error);
       throw error;
     }
   }
@@ -306,7 +336,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseJourney;
     } catch (e) {
-      console.error('❌ Error creating journey:', e);
+      logger.error('❌ Error creating journey:', e);
       throw e;
     }
   }
@@ -322,7 +352,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseJourney;
     } catch (e) {
-      console.error('❌ Error ending journey:', e);
+      logger.error('❌ Error ending journey:', e);
       throw e;
     }
   }
@@ -337,7 +367,7 @@ export class DatabaseService {
       if (error) throw error;
       return data as DatabaseJourneyLocation;
     } catch (e) {
-      console.error('❌ Error adding journey location:', e);
+      logger.error('❌ Error adding journey location:', e);
       return null;
     }
   }
@@ -372,7 +402,7 @@ export class DatabaseService {
       }));
       return { journey, points };
     } catch (e) {
-      console.error('❌ Error fetching journey feed:', e);
+      logger.error('❌ Error fetching journey feed:', e);
       return { journey: null, points: [] };
     }
   }

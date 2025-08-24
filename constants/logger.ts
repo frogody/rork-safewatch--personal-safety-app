@@ -13,6 +13,10 @@ export const Logger = {
   info: (...args: unknown[]) => log('info', ...args),
   warn: (...args: unknown[]) => log('warn', ...args),
   error: (...args: unknown[]) => log('error', ...args),
+  critical: (...args: unknown[]) => log('error', '[CRITICAL]', ...args),
 };
+
+// Backwards/forwards compatible alias
+export const logger = Logger;
 
 

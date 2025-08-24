@@ -7,7 +7,7 @@ import * as FileSystem from 'expo-file-system';
 import { DatabaseService } from '@/services/database';
 import type { DatabaseAlert, DatabaseAlertResponse } from '@/constants/supabase';
 import { useAuth } from './auth-store';
-import { Logger } from '@/constants/logger';
+import { logger } from '@/constants/logger';
 
 // Keep a single watcher for foreground monitoring
 let monitoringLocationSubscription: { remove: () => void } | null = null;
@@ -165,17 +165,17 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     queryKey: ['alerts'],
     queryFn: async () => {
       try {
-        const dbAlerts = await DatabaseService.getAlerts();
+        const dbAlerts = await DatabaseService.getAlerts({ sinceHours: 24, limit: 50 });
         const alertsWithResponses = await Promise.all(
           dbAlerts.map(async (dbAlert) => {
             const responses = await DatabaseService.getAlertResponses(dbAlert.id);
             return dbAlertToAppAlert(dbAlert, responses);
           })
         );
-        Logger.info('📡 Loaded alerts from database:', alertsWithResponses.length);
+        logger.info('📡 Loaded alerts from database:', alertsWithResponses.length);
         return alertsWithResponses;
       } catch (error) {
-        console.error('❌ Error loading alerts from database:', error);
+        logger.error('❌ Error loading alerts from database:', error);
         return [];
       }
     },
@@ -187,12 +187,12 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
   // Real-time subscription to database changes
   useEffect(() => {
     const unsubscribeAlerts = DatabaseService.subscribeToAlerts((dbAlert) => {
-      Logger.debug('📡 Received real-time alert update:', dbAlert.id);
+      logger.debug('📡 Received real-time alert update:', dbAlert.id);
       queryClient.invalidateQueries({ queryKey: ['alerts'] });
     });
 
     const unsubscribeResponses = DatabaseService.subscribeToAlertResponses((response) => {
-      Logger.debug('📡 Received real-time response update:', response.alert_id);
+      logger.debug('📡 Received real-time response update:', response.alert_id);
       queryClient.invalidateQueries({ queryKey: ['alerts'] });
     });
 
@@ -214,6 +214,12 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
 
   useEffect(() => {
     loadSafetyState();
+    // Opportunistic cleanup for the signed-in user
+    DatabaseService.cleanupOldAlerts({ olderThanHours: 72 }).then(({ resolved }) => {
+      if (resolved > 0) {
+        queryClient.invalidateQueries({ queryKey: ['alerts'] });
+      }
+    });
   }, []);
 
   const loadSafetyState = async () => {
@@ -277,7 +283,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       );
       monitoringLocationSubscription = { remove: () => sub.remove() };
 
-      Logger.info('Safety monitoring started with continuous location updates');
+      logger.info('Safety monitoring started with continuous location updates');
     } catch (error) {
       console.error('Error starting monitoring:', error);
     }
@@ -303,7 +309,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
     }));
     // Also end sharing if any
     try { endSharedJourney(); } catch {}
-    Logger.info('Safety monitoring stopped');
+    logger.info('Safety monitoring stopped');
   }, [endSharedJourney]);
 
   const checkAndEscalateAlert = useCallback(async (alertId: string) => {
@@ -333,8 +339,8 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         
         await DatabaseService.updateAlert(alertId, updates);
         
-        Logger.warn(`🚨 Escalating alert ${alertId} to batch ${currentBatch + 1}`);
-        Logger.info('👥 Sending to 10 more responders...');
+        logger.warn(`🚨 Escalating alert ${alertId} to batch ${currentBatch + 1}`);
+        logger.info('👥 Sending to 10 more responders...');
         
         // Schedule next escalation
         setTimeout(() => {
@@ -342,8 +348,8 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         }, 2 * 60 * 1000);
       } else {
         // Max batches reached, escalate to emergency services
-        Logger.error(`🚨 CRITICAL: Alert ${alertId} reached max batches - escalating to emergency services`);
-        Logger.warn('📞 Calling 911 automatically...');
+        logger.critical(`🚨 CRITICAL: Alert ${alertId} reached max batches - escalating to emergency services`);
+        logger.warn('📞 Calling 911 automatically...');
         
         await DatabaseService.updateAlert(alertId, {
           status: 'acknowledged',
@@ -407,12 +413,12 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       setSafetyState(newState);
       saveSafetyState(newState);
 
-      Logger.warn('🚨 DISTRESS SIGNAL SENT TO ALL DEVICES');
-      Logger.info('📍 Location:', newAlert.location);
-      Logger.info('👥 Sending to batch 1 (10 nearby responders)...');
-      Logger.info('⏰ Response deadline: 2 minutes');
-      Logger.info('📞 Contacting emergency contacts...');
-      Logger.info('🔄 Alert synced across all connected devices');
+      logger.critical('🚨 DISTRESS SIGNAL SENT TO ALL DEVICES');
+      logger.info('📍 Location:', newAlert.location);
+      logger.info('👥 Sending to batch 1 (10 nearby responders)...');
+      logger.info('⏰ Response deadline: 2 minutes');
+      logger.info('📞 Contacting emergency contacts...');
+      logger.info('🔄 Alert synced across all connected devices');
       
       // Set up automatic batch escalation if no response
       setTimeout(() => {
@@ -445,7 +451,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         await DatabaseService.updateAlert(alertId, { status: 'acknowledged' });
       }
 
-      Logger.info(`✅ Response to alert ${alertId} with ${response} synced to all devices`);
+      logger.info(`✅ Response to alert ${alertId} with ${response} synced to all devices`);
     } catch (error) {
       console.error('❌ Failed to respond to alert:', error);
     }
@@ -460,7 +466,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
 
     setSafetyState(newState);
     saveSafetyState(newState);
-    Logger.info('Settings updated:', newSettings);
+    logger.info('Settings updated:', newSettings);
   }, [safetyState, saveSafetyState]);
 
   const startJourney = useCallback((destination: JourneyDestination) => {
@@ -485,7 +491,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         preAlarmTriggered: false,
       },
     }));
-    Logger.info('Journey started to:', destination.name);
+    logger.info('Journey started to:', destination.name);
   }, []);
 
   const stopJourney = useCallback(() => {
@@ -502,7 +508,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         preAlarmTriggered: false,
       },
     }));
-    Logger.info('Journey stopped');
+    logger.info('Journey stopped');
   }, []);
 
   // Live share helpers
@@ -530,7 +536,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         share_token: token,
       } as any);
       setSafetyState(prev => ({ ...prev, share: { journeyId: dbJourney.id, shareToken: token } }));
-      Logger.info('🔗 Journey share created:', token);
+      logger.info('🔗 Journey share created:', token);
     } catch (e) {
       console.error('Failed to create shared journey', e);
     }
@@ -585,7 +591,7 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
         preAlarmTriggered: true,
       },
     }));
-    Logger.info('Pre-alarm triggered for journey monitoring');
+    logger.warn('Pre-alarm triggered for journey monitoring');
   }, []);
 
   return useMemo(() => ({
