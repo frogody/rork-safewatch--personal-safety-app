@@ -13,11 +13,22 @@ Sentry.init({
   enableNative: true,
   debug: __DEV__,
   tracesSampleRate: __DEV__ ? 0.1 : 0.2,
+  enableAutoSessionTracking: false, // Disable auto session tracking for better performance
+  maxBreadcrumbs: 50, // Reduce breadcrumbs to save memory
 });
 
 SplashScreen.preventAutoHideAsync();
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 2,
+      retryDelay: attemptIndex => Math.min(1000 * 2 ** attemptIndex, 30000),
+      staleTime: 5 * 60 * 1000, // 5 minutes
+      gcTime: 10 * 60 * 1000, // 10 minutes
+    },
+  },
+});
 
 function RootLayoutNav() {
   return (

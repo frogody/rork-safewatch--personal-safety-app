@@ -38,6 +38,8 @@ import MapView, { Marker, Circle, Polyline } from 'react-native-maps';
 import { useSafetyStore } from '@/store/safety-store';
 import { useAuth } from '@/store/auth-store';
 import { Colors } from '@/constants/colors';
+import OptimizedMap from '@/components/OptimizedMap';
+import PerformanceMonitor from '@/components/PerformanceMonitor';
 
 // Reuse the native implementation directly from the previous cross-platform file
 const { width, height } = Dimensions.get('window');
@@ -141,7 +143,10 @@ export default function MapScreen() {
     const handle = setTimeout(async () => {
       try {
         const url = `https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&limit=5&q=${encodeURIComponent(q)}`;
-        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        const res = await fetch(url, { 
+          headers: { 'Accept': 'application/json' },
+          signal: AbortSignal.timeout(5000) // 5 second timeout
+        });
         if (!res.ok) throw new Error(`Search failed: ${res.status}`);
         const json: Array<{ place_id: number; display_name: string; lat: string; lon: string; } & Record<string, unknown>> = await res.json();
         const mapped: PlaceSuggestion[] = json.map((it) => ({
@@ -158,7 +163,7 @@ export default function MapScreen() {
       } finally {
         setIsSearching(false);
       }
-    }, 350);
+    }, 500); // Increased debounce time
     return () => clearTimeout(handle);
   }, [destination]);
 
@@ -449,6 +454,7 @@ export default function MapScreen() {
 
   return (
     <SafeAreaView style={styles.container} testID="mapScreen-root">
+      <PerformanceMonitor name="MapScreen" />
       <View style={styles.header}>
         <Text style={styles.headerTitle} testID="mapScreen-title">
           {user.userType === 'responder' ? 'Emergency Response Map' : 'Travel Safety Map'}
@@ -459,67 +465,26 @@ export default function MapScreen() {
       </View>
 
       <View style={styles.mapContainer}>
-        <MapView
-          ref={mapRef}
+        <OptimizedMap
+          currentLocation={currentLocation}
+          alerts={user.userType === 'responder' ? alerts.map(alert => ({
+            id: alert.id,
+            location: alert.location,
+            status: alert.status
+          })) : []}
+          routeCoords={routeCoords}
           style={styles.map}
-          initialRegion={{
-            latitude: currentLocation?.latitude || 37.7749,
-            longitude: currentLocation?.longitude || -122.4194,
-            latitudeDelta: 0.05,
-            longitudeDelta: 0.05,
+          onMapReady={() => {
+            if (currentLocation && mapRef.current) {
+              mapRef.current.animateToRegion({
+                latitude: currentLocation.latitude,
+                longitude: currentLocation.longitude,
+                latitudeDelta: 0.02,
+                longitudeDelta: 0.02,
+              }, 600);
+            }
           }}
-          showsUserLocation={true}
-          showsMyLocationButton={true}
-        >
-          {currentLocation && (
-            <Marker
-              coordinate={{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }}
-              title="Your Location"
-              description="You are here"
-            >
-              <View style={styles.userMarker}>
-                <User color={Colors.text} size={16} />
-              </View>
-            </Marker>
-          )}
-
-          {isDestinationConfirmed && selectedPlace && (
-            <Marker
-              coordinate={{ latitude: selectedPlace.lat, longitude: selectedPlace.lon }}
-              title={selectedPlace.name}
-              description="Destination"
-            >
-              <View style={styles.destinationMarker}>
-                <Navigation color={Colors.text} size={18} />
-              </View>
-            </Marker>
-          )}
-
-          {user.userType === 'responder' && alerts.map((alert) => (
-            <React.Fragment key={alert.id}>
-              <Marker
-                coordinate={{ latitude: alert.location.latitude, longitude: alert.location.longitude }}
-                title={alert.title}
-                description={alert.location.address}
-                onPress={() => setSelectedAlert(alert)}
-              >
-                <View style={[styles.alertMarker, { backgroundColor: getAlertColor(alert.status) }]}>
-                  <AlertTriangle color={Colors.text} size={20} />
-                </View>
-              </Marker>
-              <Circle
-                center={{ latitude: alert.location.latitude, longitude: alert.location.longitude }}
-                radius={500}
-                strokeColor={getAlertColor(alert.status)}
-                fillColor={`${getAlertColor(alert.status)}20`}
-                strokeWidth={2}
-              />
-            </React.Fragment>
-          ))}
-          {routeCoords.length > 1 && (
-            <Polyline coordinates={routeCoords} strokeColor={Colors.yellow} strokeWidth={5} />
-          )}
-        </MapView>
+        />
       </View>
 
       {/* The rest of the bottom panels are unchanged from the previous file; omitted here for brevity */}

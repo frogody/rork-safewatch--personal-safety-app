@@ -80,7 +80,7 @@ interface SafetyState {
 }
 
 const SAFETY_STORAGE_KEY = '@safewatch_safety';
-const SYNC_INTERVAL = 1000; // 1 second for real-time feel
+const SYNC_INTERVAL = 3000; // 3 seconds to reduce API calls
 
 // Helper functions to convert between database and app formats
 function dbAlertToAppAlert(dbAlert: DatabaseAlert, responses: DatabaseAlertResponse[] = []): SafetyAlert {
@@ -180,7 +180,8 @@ export const [SafetyProvider, useSafetyStore] = createContextHook(() => {
       }
     },
     refetchInterval: SYNC_INTERVAL,
-    staleTime: 500,
+    staleTime: 2000, // Increased stale time to reduce unnecessary refetches
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   });
 
   // Real-time subscription to database changes

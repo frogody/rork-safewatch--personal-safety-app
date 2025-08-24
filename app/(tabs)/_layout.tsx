@@ -1,18 +1,24 @@
 import { Tabs } from "expo-router";
 import { Shield, Users, Settings, AlertTriangle, Map } from "lucide-react-native";
-import React from "react";
+import React, { useMemo } from "react";
 import { Colors } from '@/constants/colors';
 import { useAuth } from '@/store/auth-store';
+import PerformanceMonitor from '@/components/PerformanceMonitor';
 
 export default function TabLayout() {
   const { user } = useAuth();
-  const isSafetySeeker = user?.userType === 'safety-seeker';
-  const isResponder = user?.userType === 'responder';
+  
+  const { isSafetySeeker, isResponder } = useMemo(() => ({
+    isSafetySeeker: user?.userType === 'safety-seeker',
+    isResponder: user?.userType === 'responder',
+  }), [user?.userType]);
   
   console.log('TabLayout - User type:', user?.userType, 'isSafetySeeker:', isSafetySeeker, 'isResponder:', isResponder);
 
   return (
-    <Tabs
+    <>
+      <PerformanceMonitor name="TabLayout" />
+      <Tabs
       screenOptions={{
         tabBarActiveTintColor: Colors.yellow,
         tabBarInactiveTintColor: Colors.textMuted,
@@ -71,5 +77,6 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
+    </>
   );
 }
