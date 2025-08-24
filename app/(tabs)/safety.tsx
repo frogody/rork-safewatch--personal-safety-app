@@ -230,31 +230,7 @@ export default function SafetyScreen() {
     setLocationPermission(status === 'granted');
   };
 
-  const handleSafetyToggle = async () => {
-    if (Platform.OS !== 'web') {
-      try {
-        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      } catch (error) {
-        console.log('Haptics not available:', error);
-      }
-    }
-
-    if (!locationPermission) {
-      Alert.alert(
-        'Location Permission Required',
-        'Please enable location services to use safety monitoring.',
-        [{ text: 'OK', onPress: checkLocationPermission }]
-      );
-      return;
-    }
-
-    if (isMonitoring) {
-      stopMonitoring();
-      setCountdown(null);
-    } else {
-      startMonitoring();
-    }
-  };
+  // Removed unused Start/Stop Monitoring button
 
   const handleUnsafeButton = () => {
     console.log('🚨 "I Feel Unsafe" button pressed');
@@ -620,21 +596,6 @@ export default function SafetyScreen() {
       )}
 
       <View style={styles.mainActions}>
-        <TouchableOpacity
-          style={styles.safetyButton}
-          onPress={handleSafetyToggle}
-        >
-          <LinearGradient
-            colors={isMonitoring ? [Colors.error, '#D32F2F'] : [Colors.yellow, Colors.darkYellow]}
-            style={styles.safetyButtonGradient}
-          >
-            <Shield color={Colors.black} size={32} />
-            <Text style={styles.safetyButtonText}>
-              {isMonitoring ? "Stop Monitoring" : "Start Monitoring"}
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-
         <TouchableOpacity
           style={styles.unsafeButton}
           onPress={handleUnsafeButton}
